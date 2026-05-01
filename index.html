@@ -1099,7 +1099,16 @@ function App() {
 
   if (screen === "loading") return <LoadingScreen/>;
 
-  if (screen === "error") return (
+  if (screen === "error") return (() => {
+    const debugInfo = {
+      "Production URL":   window.location.origin,
+      "Hostname":         window.location.hostname,
+      "Server URL":       (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") ? "http://localhost:3000" : window.location.origin,
+      "User logged in":   window.__gem.user ? "Yes (" + window.__gem.user.email + ")" : "No",
+      "Has profile cache": !!localStorage.getItem("gem_p_" + (window.__gem.user?.uid || "none")),
+      "Last error":       window.__gem.error || "none captured",
+    };
+    return (
     <div style={{minHeight:"100vh",background:"#f0f2f7"}}>
       <div style={{background:"#0a1628",padding:"0 28px",height:58,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -1141,7 +1150,7 @@ function App() {
         </div>
       </div>
     </div>
-  );
+  );})();
 
   if (screen === "setup") return <SetupScreen onSaved={p=>{setProfile(p);setScreen("dashboard");}}/>;
 
