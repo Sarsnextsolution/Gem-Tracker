@@ -44,6 +44,21 @@
     }
   };
 
+  // Helper: fetch with retries (handles Render free tier spin-up delay)
+  async function fetchWithRetry(url, options = {}, retries = 3, delayMs = 3000) {
+    for (let i = 0; i < retries; i++) {
+      try {
+        const res = await fetch(url, options);
+        if (res.ok) return res;
+        if (i === retries - 1) return res; // return last response even if not ok
+      } catch(e) {
+        console.log(`Attempt ${i+1}/${retries} failed: ${e.message}`);
+        if (i === retries - 1) throw e;
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+    }
+  }
+
   onAuthStateChanged(auth, async (user) => {
     if (!user) { window.location.href = "login.html"; return; }
     window.__gem.user = user;
@@ -56,36 +71,39 @@
       try {
         window.__gem.profile = JSON.parse(cached);
         window.__gem.status  = "dashboard";
-        console.log("✓ Profile from localStorage");
-        // Background sync with server (don't wait)
-        fetch(`${SERVER}/api/profile?uid=${user.uid}`)
-          .then(r => r.json())
-          .then(d => { if (d.profile) localStorage.setItem(CACHE_KEY, JSON.stringify(d.profile)); })
-          .catch(() => {});
-        return; // Done! No need to wait
+        console.log("✓ Profile from localStorage cache");
+        // Background sync (don't block UI)
+        fetchWithRetry(`${SERVER}/api/profile?uid=${user.uid}`)
+          .then(r => r?.json())
+          .then(d => { if (d?.profile) localStorage.setItem(CACHE_KEY, JSON.stringify(d.profile)); })
+          .catch(() => console.log("Background sync skipped"));
+        return;
       } catch(e) {
         localStorage.removeItem(CACHE_KEY);
       }
     }
 
-    // Step 2: No cache — try server
-    try {
-      const res  = await fetch(`${SERVER}/api/profile?uid=${user.uid}`);
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const data = await res.json();
+    // Step 2: No cache — wait for server (with retries for Render spin-up)
+    console.log("No cache — fetching from server (may take 30s on first request)...");
+    window.__gem.loadingMessage = "Server starting up... (free tier takes ~30 seconds)";
 
+    try {
+      const res = await fetchWithRetry(`${SERVER}/api/profile?uid=${user.uid}`, {}, 5, 5000);
+      if (!res || !res.ok) throw new Error("Server unavailable after retries");
+
+      const data = await res.json();
       if (data.profile) {
         localStorage.setItem(CACHE_KEY, JSON.stringify(data.profile));
         window.__gem.profile = data.profile;
         window.__gem.status  = "dashboard";
         console.log("✓ Profile from server");
       } else {
-        window.__gem.status = "setup"; // New user
+        // No profile = new user — go to setup
+        window.__gem.status = "setup";
       }
     } catch(e) {
       console.error("Server fetch failed:", e.message);
-      // No cache + server down = show setup so user can save their details
-      // (saves to localStorage, works offline after that)
+      // Show setup as fallback — at least user can register
       window.__gem.status = "setup";
     }
   });
@@ -103,10 +121,25 @@ const STATES = ["Telangana","Andhra Pradesh","Maharashtra","Karnataka","Tamil Na
    SCREEN 1 — LOADING
 ══════════════════════════════════════ */
 function LoadingScreen() {
+  const [msg, setMsg] = useState("Loading your account...");
+  const [showWarmup, setShowWarmup] = useState(false);
+
+  useEffect(() => {
+    const t1 = setTimeout(() => setShowWarmup(true), 3000);
+    const t2 = setTimeout(() => setMsg("Server starting up — free tier wakes up in ~30 seconds..."), 5000);
+    const t3 = setTimeout(() => setMsg("Almost ready..."), 20000);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+  }, []);
+
   return (
-    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:14,background:"#f0f2f7"}}>
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:14,background:"#f0f2f7",padding:20}}>
       <div style={{width:40,height:40,border:"3px solid #e2e8f0",borderTopColor:"#2563eb",borderRadius:"50%",animation:"sp 0.8s linear infinite"}}></div>
-      <div style={{fontSize:13,color:"#64748b",fontWeight:500}}>Loading your account...</div>
+      <div style={{fontSize:13,color:"#64748b",fontWeight:500,textAlign:"center",maxWidth:400}}>{msg}</div>
+      {showWarmup && (
+        <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:9,padding:"10px 16px",fontSize:11,color:"#1e40af",maxWidth:380,textAlign:"center",lineHeight:1.6}}>
+          ☕ First request takes longer because the free server spins down when not in use. Subsequent requests will be fast!
+        </div>
+      )}
       <style>{`@keyframes sp{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
