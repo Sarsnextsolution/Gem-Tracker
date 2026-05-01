@@ -65,17 +65,17 @@
 
     const CACHE_KEY = "gem_p_" + user.uid;
 
-    // Step 1: Check localStorage FIRST (always instant)
+    // Step 1: Check localStorage FIRST — instant load
     const cached = localStorage.getItem(CACHE_KEY);
     if (cached) {
       try {
         window.__gem.profile = JSON.parse(cached);
         window.__gem.status  = "dashboard";
-        console.log("✓ Profile from localStorage cache");
-        // Background sync (don't block UI)
-        fetchWithRetry(`${SERVER}/api/profile?uid=${user.uid}`)
-          .then(r => r?.json())
-          .then(d => { if (d?.profile) localStorage.setItem(CACHE_KEY, JSON.stringify(d.profile)); })
+        console.log("✓ Loaded from localStorage instantly");
+        // Background server sync (don't block UI)
+        fetch(`${SERVER}/api/profile?uid=${user.uid}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(d => { if (d?.profile) { localStorage.setItem(CACHE_KEY, JSON.stringify(d.profile)); console.log("✓ Background sync done"); } })
           .catch(() => console.log("Background sync skipped"));
         return;
       } catch(e) {
@@ -83,27 +83,32 @@
       }
     }
 
-    // Step 2: No cache — wait for server (with retries for Render spin-up)
-    console.log("No cache — fetching from server (may take 30s on first request)...");
-    window.__gem.loadingMessage = "Server starting up... (free tier takes ~30 seconds)";
+    // Step 2: No cache — try server with quick timeout (10 sec max)
+    console.log("No cache — fetching from server...");
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
 
     try {
-      const res = await fetchWithRetry(`${SERVER}/api/profile?uid=${user.uid}`, {}, 5, 5000);
-      if (!res || !res.ok) throw new Error("Server unavailable after retries");
+      const res = await fetch(`${SERVER}/api/profile?uid=${user.uid}`, { signal: controller.signal });
+      clearTimeout(timeout);
 
+      if (!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
+
       if (data.profile) {
         localStorage.setItem(CACHE_KEY, JSON.stringify(data.profile));
         window.__gem.profile = data.profile;
         window.__gem.status  = "dashboard";
         console.log("✓ Profile from server");
       } else {
-        // No profile = new user — go to setup
+        // No profile = new user — setup
         window.__gem.status = "setup";
+        console.log("→ New user, going to setup");
       }
     } catch(e) {
-      console.error("Server fetch failed:", e.message);
-      // Show setup as fallback — at least user can register
+      clearTimeout(timeout);
+      console.warn("Server fetch failed:", e.message, "→ Going to setup as fallback");
+      // ALWAYS go to setup as fallback — never show error
       window.__gem.status = "setup";
     }
   });
