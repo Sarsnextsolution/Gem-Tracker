@@ -1,0 +1,25 @@
+{
+  "YXt9Um9V5fRvBwd1L8O44wZVsoY2": {
+    "companyName": "sars",
+    "regNo": "",
+    "incDate": "2025-08-01",
+    "type": "Startup (DPIIT Registered)",
+    "turnover": "0",
+    "dpiit": true,
+    "msme": false,
+    "pan": "",
+    "gstin": "",
+    "state": "Telangana",
+    "cats": [
+      "IT / Software",
+      "Web / App Design"
+    ],
+    "desc": "",
+    "emp": "1-10",
+    "aiProvider": "pagegrid",
+    "apiKey": "sk-pgrid-f9e27ad8a690da0e2c627556a57b64c56fbab4f295bed96944a539ddaf1e46b8",
+    "email": "info@sarsnextsolution.com",
+    "createdAt": "2026-04-25T11:25:17.369Z",
+    "updatedAt": "2026-04-25T11:25:17.375Z"
+  }
+}
