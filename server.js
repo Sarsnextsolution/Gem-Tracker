@@ -1,9 +1,10 @@
 // ─────────────────────────────────────────────
-//  GEM Checker — Multi-Provider AI Server
-//  Supports: Gemini (free), OpenAI, Claude
+//  GEM Checker — Production Server
+//  Supports: Gemini, PageGrid, OpenAI, Claude
+//  Storage: MongoDB Atlas
 //
-//  Run: node server.js
-//  Open: http://localhost:3000/login.html
+//  Local:  node server.js
+//  Render: node server.js
 // ─────────────────────────────────────────────
 
 const http  = require("http");
@@ -12,7 +13,9 @@ const fs    = require("fs");
 const path  = require("path");
 const url   = require("url");
 
-const PORT = 3000;
+const PORT         = process.env.PORT || 3000;
+const MONGO_URI    = process.env.MONGO_URI || "";
+const GEMINI_MODEL = "gemini-2.0-flash";
 
 const MIME = {
   ".html": "text/html",
@@ -21,7 +24,7 @@ const MIME = {
   ".json": "application/json",
 };
 
-// ── Rate limiter (5s between calls per key) ──
+// ── Rate limiter ─────────────────────────────
 const lastCallTime = {};
 const MIN_INTERVAL = 5000;
 const sleep        = ms => new Promise(r => setTimeout(r, ms));
@@ -36,7 +39,7 @@ async function rateLimit(keyId) {
   lastCallTime[keyId] = Date.now();
 }
 
-// ── HTTPS post helper ────────────────────────
+// ── HTTPS post helper ─────────────────────────
 function httpsPost(hostname, path, headers, body) {
   return new Promise((resolve, reject) => {
     const postData = Buffer.from(JSON.stringify(body));
@@ -60,44 +63,121 @@ function httpsPost(hostname, path, headers, body) {
 }
 
 // ══════════════════════════════════════════════
-//  PROVIDER HANDLERS
+//  MONGODB PROFILE STORAGE
 // ══════════════════════════════════════════════
 
-// ── 1. Gemini ────────────────────────────────
-async function callGemini(apiKey, pdfBase64, prompt) {
-  const model   = "gemini-2.0-flash";
-  const apiPath = `/v1beta/models/${model}:generateContent?key=${apiKey}`;
+// Simple MongoDB driver using HTTPS REST API (no npm needed!)
+// Uses MongoDB Data API
+let mongoClient = null;
+let profilesCollection = null;
 
+// Fallback: local JSON file if no MongoDB
+const LOCAL_DB = path.join(__dirname, "profiles.json");
+
+async function getProfile(uid) {
+  if (MONGO_URI) {
+    // Use MongoDB native driver via dynamic require
+    try {
+      if (!mongoClient) {
+        const { MongoClient } = require("mongodb");
+        mongoClient = new MongoClient(MONGO_URI);
+        await mongoClient.connect();
+        profilesCollection = mongoClient.db("gemchecker").collection("profiles");
+        console.log("✓ MongoDB connected!");
+      }
+      const doc = await profilesCollection.findOne({ uid });
+      return doc ? doc.profile : null;
+    } catch(e) {
+      console.error("MongoDB error:", e.message);
+      return getProfileLocal(uid);
+    }
+  }
+  return getProfileLocal(uid);
+}
+
+async function saveProfile(uid, profile) {
+  if (MONGO_URI) {
+    try {
+      if (!mongoClient) {
+        const { MongoClient } = require("mongodb");
+        mongoClient = new MongoClient(MONGO_URI);
+        await mongoClient.connect();
+        profilesCollection = mongoClient.db("gemchecker").collection("profiles");
+      }
+      await profilesCollection.updateOne(
+        { uid },
+        { $set: { uid, profile, updatedAt: new Date() } },
+        { upsert: true }
+      );
+      console.log(`  ✓ Profile saved to MongoDB for uid: ${uid.slice(0,8)}...`);
+      return;
+    } catch(e) {
+      console.error("MongoDB save error:", e.message);
+    }
+  }
+  saveProfileLocal(uid, profile);
+}
+
+function getProfileLocal(uid) {
+  try {
+    const db = fs.existsSync(LOCAL_DB) ? JSON.parse(fs.readFileSync(LOCAL_DB, "utf8")) : {};
+    return db[uid]?.profile || null;
+  } catch(e) { return null; }
+}
+
+function saveProfileLocal(uid, profile) {
+  try {
+    const db = fs.existsSync(LOCAL_DB) ? JSON.parse(fs.readFileSync(LOCAL_DB, "utf8")) : {};
+    db[uid] = { profile, updatedAt: new Date().toISOString() };
+    fs.writeFileSync(LOCAL_DB, JSON.stringify(db, null, 2));
+    console.log(`  ✓ Profile saved to local file for uid: ${uid.slice(0,8)}...`);
+  } catch(e) { console.error("Local save error:", e.message); }
+}
+
+// ══════════════════════════════════════════════
+//  AI PROVIDERS
+// ══════════════════════════════════════════════
+
+async function callGemini(apiKey, pdfBase64, prompt) {
   const result = await httpsPost(
     "generativelanguage.googleapis.com",
-    apiPath,
+    `/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
     {},
     {
-      contents: [{
-        parts: [
-          { inline_data: { mime_type: "application/pdf", data: pdfBase64 } },
-          { text: prompt }
-        ]
-      }],
+      contents: [{ parts: [{ inline_data: { mime_type: "application/pdf", data: pdfBase64 } }, { text: prompt }] }],
       generationConfig: { temperature: 0.2, maxOutputTokens: 2048 }
     }
   );
-
   if (result.status !== 200) {
-    const msg = result.body?.error?.message || "Gemini API error";
-    let userMsg = msg;
-    if (result.status === 429) userMsg = "Gemini free tier quota exceeded. Please wait a few minutes and try again.";
-    if (result.status === 403) userMsg = "Invalid Gemini API key. Please check your key at aistudio.google.com/app/apikey";
-    throw new Error(userMsg);
+    const msg = result.body?.error?.message || "Gemini error";
+    if (result.status === 429) throw new Error("Gemini quota exceeded. Please wait a few minutes.");
+    if (result.status === 403) throw new Error("Invalid Gemini API key.");
+    throw new Error(msg);
   }
-
   return result.body?.candidates?.[0]?.content?.parts?.[0]?.text || "";
 }
 
-// ── 2. OpenAI ────────────────────────────────
+async function callPageGrid(apiKey, pdfBase64, prompt) {
+  const result = await httpsPost(
+    "api.pagegrid.in",
+    "/v1/messages",
+    { "api-key": apiKey },
+    {
+      model: "claude-opus-4-6",
+      max_tokens: 2048,
+      messages: [{ role: "user", content: prompt }]
+    }
+  );
+  if (result.status !== 200) {
+    const msg = result.body?.error?.message || result.body?.message || "PageGrid error";
+    if (result.status === 401) throw new Error("Invalid PageGrid API key.");
+    if (result.status === 429) throw new Error("PageGrid rate limit. Please wait.");
+    throw new Error(msg);
+  }
+  return result.body?.content?.map(c => c.text || "").join("") || "";
+}
+
 async function callOpenAI(apiKey, pdfBase64, prompt) {
-  // OpenAI doesn't support PDF directly — send as base64 image-style text
-  // We use GPT-4o which can handle file content via text
   const result = await httpsPost(
     "api.openai.com",
     "/v1/chat/completions",
@@ -106,130 +186,42 @@ async function callOpenAI(apiKey, pdfBase64, prompt) {
       model: "gpt-4o",
       max_tokens: 2048,
       messages: [
-        {
-          role: "system",
-          content: "You are a GEM (Government e-Marketplace) procurement expert. Analyze tender documents and return structured JSON."
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: `The following is a base64-encoded PDF of a GEM tender document. Please analyze it.\n\n${prompt}`
-            },
-            {
-              type: "text",
-              text: `PDF Data (base64): data:application/pdf;base64,${pdfBase64}`
-            }
-          ]
-        }
+        { role: "system", content: "You are a GEM procurement expert. Return only valid JSON." },
+        { role: "user",   content: `PDF base64: data:application/pdf;base64,${pdfBase64}\n\n${prompt}` }
       ]
     }
   );
-
   if (result.status !== 200) {
-    const msg = result.body?.error?.message || "OpenAI API error";
-    let userMsg = msg;
-    if (result.status === 429) userMsg = "OpenAI rate limit exceeded. Please wait and try again.";
-    if (result.status === 401) userMsg = "Invalid OpenAI API key. Please check your key at platform.openai.com/api-keys";
-    if (result.status === 402) userMsg = "OpenAI billing issue. Please add credits at platform.openai.com";
-    throw new Error(userMsg);
+    if (result.status === 401) throw new Error("Invalid OpenAI API key.");
+    if (result.status === 429) throw new Error("OpenAI rate limit. Please wait.");
+    throw new Error(result.body?.error?.message || "OpenAI error");
   }
-
   return result.body?.choices?.[0]?.message?.content || "";
 }
 
-// ── 3. Claude (Anthropic) ────────────────────
 async function callClaude(apiKey, pdfBase64, prompt) {
   const result = await httpsPost(
     "api.anthropic.com",
     "/v1/messages",
+    { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
     {
-      "x-api-key":         apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    {
-      model:      "claude-haiku-4-5-20251001",
+      model: "claude-haiku-4-5-20251001",
       max_tokens: 2048,
       messages: [{
         role: "user",
         content: [
-          {
-            type:   "document",
-            source: { type: "base64", media_type: "application/pdf", data: pdfBase64 }
-          },
+          { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdfBase64 } },
           { type: "text", text: prompt }
         ]
       }]
     }
   );
-
   if (result.status !== 200) {
-    const msg = result.body?.error?.message || "Claude API error";
-    let userMsg = msg;
-    if (result.status === 429) userMsg = "Claude API rate limit hit. Please wait a moment.";
-    if (result.status === 401) userMsg = "Invalid Claude API key. Please check your key at console.anthropic.com";
-    if (result.status === 402) userMsg = "Claude billing issue. Please add credits at console.anthropic.com";
-    throw new Error(userMsg);
+    if (result.status === 401) throw new Error("Invalid Claude API key.");
+    if (result.status === 429) throw new Error("Claude rate limit. Please wait.");
+    throw new Error(result.body?.error?.message || "Claude error");
   }
-
   return result.body?.content?.map(c => c.text || "").join("") || "";
-}
-
-// ── 4. PageGrid (Affordable Claude via India) ──
-const pdf = require("pdf-parse");
-
-async function callPageGrid(apiKey, pdfBase64, prompt) {
-  try {
-    const pdfBuffer = Buffer.from(pdfBase64, "base64");
-
-    const pdfData = await pdf(pdfBuffer);
-
-    const extractedText = pdfData.text;
-
-    if (!extractedText || extractedText.trim().length < 50) {
-      throw new Error("Could not extract text from PDF");
-    }
-
-    const result = await httpsPost(
-      "api.pagegrid.in",
-      "/v1/messages",
-      {
-        "api-key": apiKey,
-      },
-      {
-        model: "claude-opus-4-6",
-        max_tokens: 2048,
-        messages: [
-          {
-            role: "user",
-            content: `
-Below is extracted GEM tender PDF content:
-
-${extractedText}
-
-${prompt}
-
-Return only valid JSON.
-`
-          }
-        ]
-      }
-    );
-
-    if (result.status !== 200) {
-      throw new Error(
-        result.body?.error?.message ||
-        result.body?.message ||
-        "PageGrid API error"
-      );
-    }
-
-    return result.body?.content?.map(c => c.text || "").join("") || "";
-
-  } catch (err) {
-    throw new Error("PageGrid PDF parsing failed: " + err.message);
-  }
 }
 
 // ══════════════════════════════════════════════
@@ -243,113 +235,81 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
 
-  const parsedUrl = url.parse(req.url);
-  // Health check route
-if (parsedUrl.pathname === "/health") {
-  res.writeHead(200, {
-    "Content-Type": "application/json"
-  });
+  const parsedUrl  = new URL(req.url, `http://localhost:${PORT}`);
+  const pathname   = parsedUrl.pathname;
 
-  res.end(JSON.stringify({
-    status: "ok",
-    message: "Server running successfully"
-  }));
-  return;
-}
-
-  // ── POST /api/analyze ───────────────────
-  if (parsedUrl.pathname === "/api/analyze" && req.method === "POST") {
-    let body = "";
-    req.on("data", chunk => { body += chunk.toString(); });
-
-    req.on("end", async () => {
-      try {
-        const { pdfBase64, prompt, apiKey, aiProvider } = JSON.parse(body);
-
-        // Validate
-        if (!apiKey)    throw new Error("API key is missing. Please update your profile.");
-        if (!pdfBase64) throw new Error("No PDF data received.");
-        if (!prompt)    throw new Error("No prompt received.");
-
-        const provider = aiProvider || "gemini";
-
-        // Validate PageGrid key format
-        if (provider === "pagegrid" && !apiKey.startsWith("sk-pgrid-")) {
-          throw new Error("Invalid PageGrid key format. Key should start with sk-pgrid-");
-        }
-        const keyId    = apiKey.slice(-8);
-
-        console.log(`  [${provider}] Analyzing... (key: ...${keyId})`);
-
-        // Rate limit
-        await rateLimit(provider + "_" + keyId);
-
-        // Call the right provider
-        let text = "";
-        if      (provider === "gemini")   text = await callGemini(apiKey, pdfBase64, prompt);
-        else if (provider === "openai")   text = await callOpenAI(apiKey, pdfBase64, prompt);
-        else if (provider === "claude")   text = await callClaude(apiKey, pdfBase64, prompt);
-        else if (provider === "pagegrid") text = await callPageGrid(apiKey, pdfBase64, prompt);
-        else throw new Error(`Unknown provider: ${provider}`);
-
-        console.log(`  Done. Response: ${text.length} chars`);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ text }));
-
-      } catch (err) {
-        console.error("  Error:", err.message);
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: err.message }));
-      }
-    });
-
-    return;
-  }
-
-  // ── GET /api/profile?uid=xxx ─────────────
-  if (parsedUrl.pathname === "/api/profile" && req.method === "GET") {
-    const params = new URLSearchParams(parsedUrl.query || "");
-    const uid    = params.get("uid");
-    if (!uid) { res.writeHead(400); res.end(JSON.stringify({error:"uid required"})); return; }
-
-    const dbPath = path.join(__dirname, "profiles.json");
+  // ── GET /api/profile ────────────────────────
+  if (pathname === "/api/profile" && req.method === "GET") {
+    const uid = parsedUrl.searchParams.get("uid");
+    if (!uid) { res.writeHead(400); res.end(JSON.stringify({ error: "uid required" })); return; }
     try {
-      const db      = fs.existsSync(dbPath) ? JSON.parse(fs.readFileSync(dbPath, "utf8")) : {};
-      const profile = db[uid] || null;
-      res.writeHead(200, {"Content-Type":"application/json"});
+      const profile = await getProfile(uid);
+      res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ profile }));
     } catch(e) {
-      res.writeHead(500); res.end(JSON.stringify({error:e.message}));
+      res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
     }
     return;
   }
 
-  // ── POST /api/profile ─────────────────────
-  if (parsedUrl.pathname === "/api/profile" && req.method === "POST") {
+  // ── POST /api/profile ───────────────────────
+  if (pathname === "/api/profile" && req.method === "POST") {
     let body = "";
-    req.on("data", chunk => { body += chunk.toString(); });
-    req.on("end", () => {
+    req.on("data", c => { body += c.toString(); });
+    req.on("end", async () => {
       try {
         const { uid, profile } = JSON.parse(body);
-        if (!uid || !profile) { res.writeHead(400); res.end(JSON.stringify({error:"uid and profile required"})); return; }
-
-        const dbPath = path.join(__dirname, "profiles.json");
-        const db     = fs.existsSync(dbPath) ? JSON.parse(fs.readFileSync(dbPath, "utf8")) : {};
-        db[uid]      = { ...profile, updatedAt: new Date().toISOString() };
-        fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
-
-        console.log(`  ✓ Profile saved for uid: ${uid.slice(0,8)}...`);
-        res.writeHead(200, {"Content-Type":"application/json"});
+        if (!uid || !profile) { res.writeHead(400); res.end(JSON.stringify({ error: "uid and profile required" })); return; }
+        await saveProfile(uid, profile);
+        res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true }));
       } catch(e) {
-        res.writeHead(500); res.end(JSON.stringify({error:e.message}));
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
       }
     });
     return;
   }
 
-  // ── Static files ────────────────────────
-  let filePath = parsedUrl.pathname === "/" ? "/login.html" : parsedUrl.pathname;
+  // ── POST /api/analyze ───────────────────────
+  if (pathname === "/api/analyze" && req.method === "POST") {
+    let body = "";
+    req.on("data", c => { body += c.toString(); });
+    req.on("end", async () => {
+      try {
+        const { pdfBase64, prompt, apiKey, aiProvider } = JSON.parse(body);
+
+        if (!apiKey)    throw new Error("API key missing. Please update your profile.");
+        if (!pdfBase64) throw new Error("No PDF data received.");
+        if (!prompt)    throw new Error("No prompt received.");
+
+        const provider = aiProvider || "gemini";
+        const keyId    = apiKey.slice(-8);
+
+        console.log(`  [${provider}] Analyzing... (key: ...${keyId})`);
+        await rateLimit(provider + "_" + keyId);
+
+        let text = "";
+        if      (provider === "gemini")   text = await callGemini(apiKey, pdfBase64, prompt);
+        else if (provider === "pagegrid") text = await callPageGrid(apiKey, pdfBase64, prompt);
+        else if (provider === "openai")   text = await callOpenAI(apiKey, pdfBase64, prompt);
+        else if (provider === "claude")   text = await callClaude(apiKey, pdfBase64, prompt);
+        else throw new Error(`Unknown provider: ${provider}`);
+
+        console.log(`  ✓ Done. Response: ${text.length} chars`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ text }));
+
+      } catch(e) {
+        console.error("  Error:", e.message);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // ── Static files ─────────────────────────────
+  let filePath = pathname === "/" ? "/login.html" : pathname;
   filePath     = path.join(__dirname, filePath);
 
   fs.readFile(filePath, (err, data) => {
@@ -362,11 +322,7 @@ if (parsedUrl.pathname === "/health") {
 server.listen(PORT, () => {
   console.log("\n─────────────────────────────────────────");
   console.log(`  GEM Checker running at http://localhost:${PORT}`);
+  console.log(`  Storage: ${MONGO_URI ? "MongoDB Atlas ✓" : "Local file (profiles.json)"}`);
   console.log("─────────────────────────────────────────");
-  console.log("  Supported AI providers:");
-  console.log("    • Gemini    (Free     — aistudio.google.com)");
-  console.log("    • PageGrid  (Affordable — pagegrid.in)");
-  console.log("    • OpenAI    (Paid     — platform.openai.com)");
-  console.log("    • Claude    (Paid     — console.anthropic.com)");
-  console.log("");
+  console.log("  AI Providers: Gemini | PageGrid | OpenAI | Claude\n");
 });

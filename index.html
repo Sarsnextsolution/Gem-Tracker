@@ -18,7 +18,10 @@
   import { auth } from "./firebase-config.js";
   import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
-  const SERVER = "http://localhost:3000";
+  // Auto-detect: local vs production
+  const SERVER = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+    ? "http://localhost:3000"
+    : window.location.origin;  // Render URL in production
 
   window.__gem = {
     status:  "loading",

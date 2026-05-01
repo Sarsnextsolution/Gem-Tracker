@@ -1,0 +1,16 @@
+{
+  "name": "gem-checker",
+  "version": "1.0.0",
+  "description": "GEM Tender Eligibility Checker",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "mongodb": "^6.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
