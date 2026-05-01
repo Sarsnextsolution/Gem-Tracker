@@ -112,7 +112,10 @@
 <script type="text/babel">
 const { useState, useEffect, useRef } = React;
 
-const API_URL = "http://localhost:3000/api/analyze";
+// Auto-detect API URL: local vs production
+const API_URL = (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+  ? "http://localhost:3000/api/analyze"
+  : window.location.origin + "/api/analyze";
 
 const CATS   = ["IT / Software","Web / App Design","Data Entry","Consulting","Training","Printing","Office Equipment","Manpower","Security","Housekeeping","Civil / Construction","Electrical","Furniture","Medical Supplies","Agriculture"];
 const STATES = ["Telangana","Andhra Pradesh","Maharashtra","Karnataka","Tamil Nadu","Delhi","UP","Gujarat","Rajasthan","Other"];
