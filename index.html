@@ -197,13 +197,26 @@ function LoadingScreen() {
    SCREEN 2 — COMPANY SETUP
 ══════════════════════════════════════ */
 function SetupScreen({ onSaved, onCancel, initialData }) {
-  const [p, setP] = useState(initialData || {
+  // Default profile structure
+  const defaults = {
     companyName:"", regNo:"", incDate:"2025-08-01",
     type:"Startup (DPIIT Registered)", turnover:"0",
-    dpiit:true, msme:false, pan:"", gstin:"",
+    dpiit:false, msme:false, iso9001:false, iso27001:false, nasscom:false, 
+    gem_seller:false, startupIndia:false, oem:false, pan:false, gst:false,
+    panNumber:"", gstin:"",
+    doc_oem_cert:false, doc_oem_auth:false, doc_experience:false, doc_turnover:false,
+    doc_balance_sheet:false, doc_past_orders:false, doc_delivery_cert:false, 
+    doc_itr:false, doc_bank_stmt:false, doc_pq_docs:false, doc_mou:false, doc_workforce:false,
     state:"Telangana", cats:["IT / Software","Web / App Design"],
     desc:"", emp:"1-10", aiProvider:"gemini", apiKey:""
-  });
+  };
+  
+  // Merge initialData with defaults — ALL fields exist + existing values preserved
+  const initialState = initialData 
+    ? { ...defaults, ...initialData }
+    : { ...defaults, dpiit:true };
+  
+  const [p, setP] = useState(initialState);
   const [saving, setSaving] = useState(false);
   const [err, setErr]       = useState("");
 
@@ -273,7 +286,7 @@ function SetupScreen({ onSaved, onCancel, initialData }) {
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
             {[["Company Name *","text","companyName","e.g. Sai Tech Solutions Pvt Ltd"],
               ["Registration / CIN No","text","regNo","CIN number"],
-              ["PAN Number","text","pan","ABCDE1234F"],
+              ["PAN Number","text","panNumber","ABCDE1234F"],
               ["GSTIN","text","gstin","36XXXXX..."]
             ].map(([label,type,key,ph]) => (
               <div key={key}>
@@ -730,7 +743,7 @@ Respond in clear English. Return ONLY valid JSON — no markdown, no extra text:
       <div className="header">
         <div className="hlogo">
           <div className="hicon">GEM</div>
-          <div><div className="htitle">GEM Tender Eligibility Checker</div><div className="hsub">{profile.companyName}</div></div>
+          <div><div className="htitle">GEM Tender Eligibility Checker</div><div className="hsub">{currentProfile.companyName}</div></div>
         </div>
         <div className="hright">
           <span className="hbadge">Startup Edition</span>
@@ -744,28 +757,28 @@ Respond in clear English. Return ONLY valid JSON — no markdown, no extra text:
           <div className="slabel">Company</div>
           <div className="company-card">
             <div className="company-avatar">{initials}</div>
-            <div className="company-name">{profile.companyName}</div>
-            <div className="company-type">{profile.type}</div>
+            <div className="company-name">{currentProfile.companyName}</div>
+            <div className="company-type">{currentProfile.type}</div>
             <div className="company-pills">
-              {profile.dpiit&&<span className="cpill cpill-green">✓ DPIIT</span>}
-              {profile.msme&&<span className="cpill cpill-blue">✓ MSME</span>}
-              <span className="cpill cpill-gray">Est. {profile.incDate?.slice(0,7)}</span>
+              {currentProfile.dpiit&&<span className="cpill cpill-green">✓ DPIIT</span>}
+              {currentProfile.msme&&<span className="cpill cpill-blue">✓ MSME</span>}
+              <span className="cpill cpill-gray">Est. {currentProfile.incDate?.slice(0,7)}</span>
             </div>
           </div>
           <div className="slabel">Details</div>
-          <div className="info-row"><span className="info-key">Turnover</span><span className="info-val">₹{profile.turnover}L</span></div>
-          <div className="info-row"><span className="info-key">Team</span><span className="info-val">{profile.emp}</span></div>
-          <div className="info-row"><span className="info-key">State</span><span className="info-val">{profile.state}</span></div>
-          <div className="info-row"><span className="info-key">AI Provider</span><span className="info-val" style={{textTransform:"capitalize"}}>{profile.aiProvider||"gemini"}</span></div>
-          {profile.pan&&<div className="info-row"><span className="info-key">PAN</span><span className="info-val">{profile.pan}</span></div>}
+          <div className="info-row"><span className="info-key">Turnover</span><span className="info-val">₹{currentProfile.turnover}L</span></div>
+          <div className="info-row"><span className="info-key">Team</span><span className="info-val">{currentProfile.emp}</span></div>
+          <div className="info-row"><span className="info-key">State</span><span className="info-val">{currentProfile.state}</span></div>
+          <div className="info-row"><span className="info-key">AI Provider</span><span className="info-val" style={{textTransform:"capitalize"}}>{currentProfile.aiProvider||"gemini"}</span></div>
+          {currentProfile.panNumber&&<div className="info-row"><span className="info-key">PAN</span><span className="info-val">{currentProfile.panNumber}</span></div>}
           <div className="slabel">Categories</div>
-          {(profile.cats||[]).slice(0,6).map(c=>(
+          {(currentProfile.cats||[]).slice(0,6).map(c=>(
             <div key={c} className="info-row" style={{paddingLeft:6}}>
               <span style={{fontSize:10,color:"#60a5fa"}}>▸</span>
               <span className="info-val" style={{color:"#475569",textAlign:"left",marginLeft:6}}>{c}</span>
             </div>
           ))}
-          {(profile.cats||[]).length>6&&<div style={{fontSize:10,color:"#94a3b8",padding:"4px 6px"}}>+{profile.cats.length-6} more</div>}
+          {(currentProfile.cats||[]).length>6&&<div style={{fontSize:10,color:"#94a3b8",padding:"4px 6px"}}>+{currentProfile.cats.length-6} more</div>}
           <div className="slabel">Menu</div>
           <div className={`snav-item${view==="upload"?" active":""}`} onClick={()=>setView("upload")}>
             <div className="snav-icon">📤</div>Upload Documents
