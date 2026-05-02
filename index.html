@@ -57,20 +57,6 @@
     }
   };
 
-  // Helper: fetch with retries (handles Render free tier spin-up delay)
-  async function fetchWithRetry(url, options = {}, retries = 3, delayMs = 3000) {
-    for (let i = 0; i < retries; i++) {
-      try {
-        const res = await fetch(url, options);
-        if (res.ok) return res;
-        if (i === retries - 1) return res; // return last response even if not ok
-      } catch(e) {
-        console.log(`Attempt ${i+1}/${retries} failed: ${e.message}`);
-        if (i === retries - 1) throw e;
-        await new Promise(r => setTimeout(r, delayMs));
-      }
-    }
-  }
 
   onAuthStateChanged(auth, async (user) => {
     if (!user) { window.location.href = "login.html"; return; }
@@ -78,72 +64,84 @@
 
     const CACHE_KEY = "gem_p_" + user.uid;
 
-    // ─── STEP 1: localStorage cache (instant) ───
-    const cached = localStorage.getItem(CACHE_KEY);
-    if (cached) {
+    // ══ RULE: localStorage = SOURCE OF TRUTH ══
+    // If localStorage has profile → ALWAYS dashboard, no exceptions
+    // Server is only used for:
+    //   1. First time (no cache) → get profile
+    //   2. Background sync (update cache silently)
+    // Server NEVER overrides localStorage to go to setup
+
+    const loadFromCache = () => {
+      const cached = localStorage.getItem(CACHE_KEY);
+      if (!cached) return false;
       try {
-        window.__gem.profile = JSON.parse(cached);
+        const profile = JSON.parse(cached);
+        if (!profile || !profile.companyName) return false;
+        window.__gem.profile = profile;
         window.__gem.status  = "dashboard";
-        console.log("✓ Profile from localStorage — instant dashboard");
-        // Background server sync
-        fetch(`${SERVER}/api/profile?uid=${user.uid}`)
-          .then(r => r.ok ? r.json() : null)
-          .then(d => { 
-            if (d?.profile) { 
-              localStorage.setItem(CACHE_KEY, JSON.stringify(d.profile)); 
-              console.log("✓ Server sync OK"); 
-            }
-          })
-          .catch(() => console.log("Server sync skipped"));
-        return;
+        console.log("✓ Dashboard from localStorage");
+        return true;
       } catch(e) {
         localStorage.removeItem(CACHE_KEY);
+        return false;
       }
+    };
+
+    // Step 1: Try localStorage first (instant)
+    if (loadFromCache()) {
+      // Background sync — ONLY updates cache if server has NEWER data
+      // NEVER changes screen status
+      setTimeout(async () => {
+        try {
+          const r = await fetch(`${SERVER}/api/profile?uid=${user.uid}`);
+          if (!r.ok) return;
+          const d = await r.json();
+          if (d?.profile?.companyName) {
+            localStorage.setItem(CACHE_KEY, JSON.stringify(d.profile));
+            console.log("✓ Background sync done");
+          }
+        } catch(e) { /* silently skip */ }
+      }, 2000);
+      return;
     }
 
-    // ─── STEP 2: No cache — wait for server (60s max for Render spin-up) ───
-    console.log("No cache — fetching from server (may take 30-60s on first wake-up)...");
+    // Step 2: No localStorage — try server (first time user on this device)
+    console.log("No cache — trying server...");
     
-    let attempts = 0;
-    const maxAttempts = 6; // 6 × 10s = 60 seconds total
-    
-    while (attempts < maxAttempts) {
-      attempts++;
-      console.log(`Attempt ${attempts}/${maxAttempts}...`);
-      
+    for (let i = 1; i <= 6; i++) {
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
-        
-        const res = await fetch(`${SERVER}/api/profile?uid=${user.uid}`, { signal: controller.signal });
-        clearTimeout(timeout);
-        
+        const ctrl = new AbortController();
+        const t    = setTimeout(() => ctrl.abort(), 12000);
+        const res  = await fetch(`${SERVER}/api/profile?uid=${user.uid}`, { signal: ctrl.signal });
+        clearTimeout(t);
+
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        
-        if (data.profile) {
-          // Profile exists in MongoDB — save to cache and load dashboard
+
+        if (data?.profile?.companyName) {
+          // Profile found in MongoDB
           localStorage.setItem(CACHE_KEY, JSON.stringify(data.profile));
           window.__gem.profile = data.profile;
           window.__gem.status  = "dashboard";
-          console.log("✓ Profile loaded from MongoDB");
+          console.log("✓ Profile from MongoDB, cached locally");
           return;
         } else {
-          // No profile in server = new user
+          // Confirmed new user — no profile anywhere
           window.__gem.status = "setup";
-          console.log("→ New user, going to setup");
+          console.log("→ New user — setup screen");
           return;
         }
       } catch(e) {
-        console.warn(`Attempt ${attempts} failed:`, e.message);
-        if (attempts >= maxAttempts) {
-          // Server completely unreachable after 60s
-          window.__gem.status = "setup";
-          console.warn("Server unreachable — going to setup as fallback");
-          return;
-        }
+        console.warn(`Server attempt ${i}/6 failed: ${e.message}`);
+        if (i < 6) await new Promise(r => setTimeout(r, 5000));
       }
     }
+    
+    // Server completely unreachable after all retries
+    // → show setup so user can fill details
+    // (saves to localStorage on submit, works offline)
+    window.__gem.status = "setup";
+    console.warn("Server unreachable — showing setup");
   });
 </script>
 
