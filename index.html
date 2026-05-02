@@ -35,16 +35,25 @@
     signOut,
 
     saveProfile: async (uid, profile) => {
-      // ALWAYS save to localStorage FIRST — works even if server is down
+      // Save to localStorage first (instant)
       localStorage.setItem("gem_p_" + uid, JSON.stringify(profile));
       console.log("✓ Profile saved to localStorage");
-      // Try server in background (optional)
-      fetch(`${SERVER}/api/profile`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ uid, profile })
-      }).then(r => { if(r.ok) console.log("✓ Profile synced to server"); })
-        .catch(e => console.warn("Server sync skipped:", e.message));
+      
+      // WAIT for server save (critical for cross-device sync)
+      try {
+        const res = await fetch(`${SERVER}/api/profile`, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ uid, profile })
+        });
+        if (res.ok) {
+          console.log("✓ Profile synced to MongoDB");
+        } else {
+          console.warn("Server returned " + res.status + " — profile saved locally only");
+        }
+      } catch(e) {
+        console.warn("Server unreachable — profile saved locally only:", e.message);
+      }
     }
   };
 
@@ -69,51 +78,71 @@
 
     const CACHE_KEY = "gem_p_" + user.uid;
 
-    // Step 1: Check localStorage FIRST — instant load
+    // ─── STEP 1: localStorage cache (instant) ───
     const cached = localStorage.getItem(CACHE_KEY);
     if (cached) {
       try {
         window.__gem.profile = JSON.parse(cached);
         window.__gem.status  = "dashboard";
-        console.log("✓ Loaded from localStorage instantly");
-        // Background server sync (don't block UI)
+        console.log("✓ Profile from localStorage — instant dashboard");
+        // Background server sync
         fetch(`${SERVER}/api/profile?uid=${user.uid}`)
           .then(r => r.ok ? r.json() : null)
-          .then(d => { if (d?.profile) { localStorage.setItem(CACHE_KEY, JSON.stringify(d.profile)); console.log("✓ Background sync done"); } })
-          .catch(() => console.log("Background sync skipped"));
+          .then(d => { 
+            if (d?.profile) { 
+              localStorage.setItem(CACHE_KEY, JSON.stringify(d.profile)); 
+              console.log("✓ Server sync OK"); 
+            }
+          })
+          .catch(() => console.log("Server sync skipped"));
         return;
       } catch(e) {
         localStorage.removeItem(CACHE_KEY);
       }
     }
 
-    // Step 2: No cache — try server with quick timeout (10 sec max)
-    console.log("No cache — fetching from server...");
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-
-    try {
-      const res = await fetch(`${SERVER}/api/profile?uid=${user.uid}`, { signal: controller.signal });
-      clearTimeout(timeout);
-
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const data = await res.json();
-
-      if (data.profile) {
-        localStorage.setItem(CACHE_KEY, JSON.stringify(data.profile));
-        window.__gem.profile = data.profile;
-        window.__gem.status  = "dashboard";
-        console.log("✓ Profile from server");
-      } else {
-        // No profile = new user — setup
-        window.__gem.status = "setup";
-        console.log("→ New user, going to setup");
+    // ─── STEP 2: No cache — wait for server (60s max for Render spin-up) ───
+    console.log("No cache — fetching from server (may take 30-60s on first wake-up)...");
+    
+    let attempts = 0;
+    const maxAttempts = 6; // 6 × 10s = 60 seconds total
+    
+    while (attempts < maxAttempts) {
+      attempts++;
+      console.log(`Attempt ${attempts}/${maxAttempts}...`);
+      
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        
+        const res = await fetch(`${SERVER}/api/profile?uid=${user.uid}`, { signal: controller.signal });
+        clearTimeout(timeout);
+        
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        
+        if (data.profile) {
+          // Profile exists in MongoDB — save to cache and load dashboard
+          localStorage.setItem(CACHE_KEY, JSON.stringify(data.profile));
+          window.__gem.profile = data.profile;
+          window.__gem.status  = "dashboard";
+          console.log("✓ Profile loaded from MongoDB");
+          return;
+        } else {
+          // No profile in server = new user
+          window.__gem.status = "setup";
+          console.log("→ New user, going to setup");
+          return;
+        }
+      } catch(e) {
+        console.warn(`Attempt ${attempts} failed:`, e.message);
+        if (attempts >= maxAttempts) {
+          // Server completely unreachable after 60s
+          window.__gem.status = "setup";
+          console.warn("Server unreachable — going to setup as fallback");
+          return;
+        }
       }
-    } catch(e) {
-      clearTimeout(timeout);
-      console.warn("Server fetch failed:", e.message, "→ Going to setup as fallback");
-      // ALWAYS go to setup as fallback — never show error
-      window.__gem.status = "setup";
     }
   });
 </script>
@@ -134,22 +163,29 @@ const STATES = ["Telangana","Andhra Pradesh","Maharashtra","Karnataka","Tamil Na
 ══════════════════════════════════════ */
 function LoadingScreen() {
   const [msg, setMsg] = useState("Loading your account...");
-  const [showWarmup, setShowWarmup] = useState(false);
+  const [seconds, setSeconds] = useState(0);
 
   useEffect(() => {
-    const t1 = setTimeout(() => setShowWarmup(true), 3000);
-    const t2 = setTimeout(() => setMsg("Server starting up — free tier wakes up in ~30 seconds..."), 5000);
-    const t3 = setTimeout(() => setMsg("Almost ready..."), 20000);
-    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+    const interval = setInterval(() => setSeconds(s => s + 1), 1000);
+    const t1 = setTimeout(() => setMsg("Connecting to server..."), 3000);
+    const t2 = setTimeout(() => setMsg("Server waking up (free tier) — please wait..."), 8000);
+    const t3 = setTimeout(() => setMsg("Almost ready, fetching your data..."), 25000);
+    const t4 = setTimeout(() => setMsg("Final connection retry..."), 45000);
+    return () => { 
+      clearInterval(interval);
+      clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4);
+    };
   }, []);
 
   return (
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:14,background:"#f0f2f7",padding:20}}>
-      <div style={{width:40,height:40,border:"3px solid #e2e8f0",borderTopColor:"#2563eb",borderRadius:"50%",animation:"sp 0.8s linear infinite"}}></div>
-      <div style={{fontSize:13,color:"#64748b",fontWeight:500,textAlign:"center",maxWidth:400}}>{msg}</div>
-      {showWarmup && (
-        <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:9,padding:"10px 16px",fontSize:11,color:"#1e40af",maxWidth:380,textAlign:"center",lineHeight:1.6}}>
-          ☕ First request takes longer because the free server spins down when not in use. Subsequent requests will be fast!
+      <div style={{width:48,height:48,border:"3px solid #e2e8f0",borderTopColor:"#2563eb",borderRadius:"50%",animation:"sp 0.8s linear infinite"}}></div>
+      <div style={{fontSize:14,color:"#0f172a",fontWeight:600,textAlign:"center",maxWidth:420}}>{msg}</div>
+      <div style={{fontSize:11,color:"#94a3b8"}}>{seconds}s elapsed</div>
+      {seconds >= 5 && (
+        <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:10,padding:"12px 18px",fontSize:11,color:"#1e40af",maxWidth:420,textAlign:"center",lineHeight:1.7}}>
+          ☕ <strong>Free server is waking up</strong><br/>
+          The Render.com free tier sleeps when not in use. First request takes 30-60 seconds. Your data is safe and will load shortly.
         </div>
       )}
       <style>{`@keyframes sp{to{transform:rotate(360deg)}}`}</style>
