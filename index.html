@@ -184,6 +184,7 @@ function SetupScreen({ onSaved, onCancel, initialData }) {
       const profile = { ...p, email: user.email, createdAt: new Date().toISOString() };
       // Save to localStorage immediately
       localStorage.setItem("gem_p_" + user.uid, JSON.stringify(profile));
+      console.log("Profile saved:", profile);
       // Save to server
       try {
         await fetch(`${window.__SERVER}/api/profile`, {
