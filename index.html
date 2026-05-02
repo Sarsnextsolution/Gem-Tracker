@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>GEM Tender Checker</title>
 
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans&family=Space+Grotesk&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 <link rel="stylesheet" href="style.css"/>
 </head>
 
@@ -16,30 +16,26 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
+<!-- 🔥 AUTH SCRIPT -->
 <script type="module">
 import { auth } from "./firebase-config.js";
 import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
-const SERVER = window.location.origin;
-
-// logout
 window.__signOut = () => signOut(auth).then(()=>location.href="login.html");
 
-// 🔥 MAIN FIXED AUTH FLOW
 onAuthStateChanged(auth, async (user) => {
   if (!user) {
     location.href = "login.html";
     return;
   }
 
-  // ✅ global user
   window.__authUser = user;
 
   const uid = user.uid;
   const cacheKey = "gem_p_" + uid;
-
-  // 1️⃣ check cache first
   const cached = localStorage.getItem(cacheKey);
+
+  // ✅ CACHE FIRST
   if (cached) {
     try {
       const profile = JSON.parse(cached);
@@ -53,23 +49,20 @@ onAuthStateChanged(auth, async (user) => {
     }
   }
 
-  // 2️⃣ fetch from server
+  // ✅ SERVER FETCH
   try {
-    const res = await fetch(`${SERVER}/api/profile?uid=${uid}`);
+    const res = await fetch(`${window.location.origin}/api/profile?uid=${uid}`);
     const data = await res.json();
 
     if (data.profile) {
       localStorage.setItem(cacheKey, JSON.stringify(data.profile));
-
       window.__appStatus = "dashboard";
       window.__currentProfile = data.profile;
     } else {
       window.__appStatus = "setup";
     }
 
-  } catch (e) {
-    console.log("Server slow — fallback");
-
+  } catch {
     if (cached) {
       window.__appStatus = "dashboard";
       window.__currentProfile = JSON.parse(cached);
@@ -80,30 +73,30 @@ onAuthStateChanged(auth, async (user) => {
 });
 </script>
 
+<!-- 🔥 REACT APP -->
 <script type="text/babel">
 const { useState, useEffect } = React;
 
-/* ========= LOADING ========= */
-function LoadingScreen() {
+/* LOADING */
+function LoadingScreen(){
   return (
     <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <h3>Loading...</h3>
+      <h3>Connecting to server...</h3>
     </div>
   );
 }
 
-/* ========= SETUP ========= */
+/* SETUP SCREEN */
 function SetupScreen({ onSaved }) {
-
   const user = window.__authUser; // ✅ FIX
 
-  const [companyName, setCompany] = useState("");
+  const [company, setCompany] = useState("");
 
   const save = () => {
-    if (!companyName) return alert("Enter company name");
+    if (!company) return alert("Enter company name");
 
     const profile = {
-      companyName,
+      companyName: company,
       email: user.email
     };
 
@@ -120,58 +113,64 @@ function SetupScreen({ onSaved }) {
 
   return (
     <div style={{padding:40}}>
-      <h2>Setup Company</h2>
+      <h2>Set Up Company Profile</h2>
 
-      <p>Logged in as: <b>{user?.email || "Loading..."}</b></p>
+      <p>Logged in as <b>{user?.email || "Loading..."}</b></p>
 
-      <input placeholder="Company Name"
-        value={companyName}
+      <input
+        placeholder="Company Name"
+        value={company}
         onChange={e=>setCompany(e.target.value)}
       />
 
       <br/><br/>
 
-      <button onClick={save}>Save</button>
+      <button onClick={save}>Save & Continue</button>
     </div>
   );
 }
 
-/* ========= DASHBOARD ========= */
+/* DASHBOARD */
 function Dashboard({ profile }) {
   return (
     <div style={{padding:40}}>
       <h2>Dashboard</h2>
-      <p>Company: {profile.companyName}</p>
-      <p>Email: {profile.email}</p>
+
+      <p><b>Company:</b> {profile.companyName}</p>
+      <p><b>Email:</b> {profile.email}</p>
 
       <button onClick={()=>window.__signOut()}>Logout</button>
     </div>
   );
 }
 
-/* ========= APP ========= */
-function App() {
+/* APP ROOT */
+function App(){
   const [screen, setScreen] = useState("loading");
   const [profile, setProfile] = useState(null);
 
   useEffect(() => {
-    const i = setInterval(() => {
+    const check = setInterval(() => {
+
       if (window.__appStatus === "dashboard") {
         setProfile(window.__currentProfile);
         setScreen("dashboard");
-        clearInterval(i);
+        clearInterval(check);
       }
+
       if (window.__appStatus === "setup") {
         setScreen("setup");
-        clearInterval(i);
+        clearInterval(check);
       }
+
     }, 300);
 
-    return () => clearInterval(i);
+    return () => clearInterval(check);
   }, []);
 
   if (screen === "loading") return <LoadingScreen/>;
   if (screen === "setup") return <SetupScreen onSaved={(p)=>{setProfile(p);setScreen("dashboard");}}/>;
+
   return <Dashboard profile={profile}/>;
 }
 
