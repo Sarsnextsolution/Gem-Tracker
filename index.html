@@ -22,126 +22,67 @@
   import { auth } from "./firebase-config.js";
   import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
-  // Auto-detect: local vs production
-  const SERVER = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+  const SERVER = (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
     ? "http://localhost:3000"
-    : window.location.origin;  // Render URL in production
+    : window.location.origin;
 
-  window.__gem = {
-    status:  "loading",
-    profile: null,
-    user:    null,
-    auth,
-    signOut,
+  const CACHE  = uid => "gem_p_" + uid;
 
-    saveProfile: async (uid, profile) => {
-      // Save to localStorage first (instant)
-      localStorage.setItem("gem_p_" + uid, JSON.stringify(profile));
-      console.log("✓ Profile saved to localStorage");
-      
-      // WAIT for server save (critical for cross-device sync)
-      try {
-        const res = await fetch(`${SERVER}/api/profile`, {
-          method:  "POST",
-          headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ uid, profile })
-        });
-        if (res.ok) {
-          console.log("✓ Profile synced to MongoDB");
-        } else {
-          console.warn("Server returned " + res.status + " — profile saved locally only");
-        }
-      } catch(e) {
-        console.warn("Server unreachable — profile saved locally only:", e.message);
-      }
-    }
-  };
-
+  // Store signOut for React
+  window.__signOut = () => signOut(auth).then(() => window.location.href = "login.html").catch(() => window.location.href = "login.html");
+  window.__SERVER  = SERVER;
 
   onAuthStateChanged(auth, async (user) => {
     if (!user) { window.location.href = "login.html"; return; }
-    window.__gem.user = user;
 
-    const CACHE_KEY = "gem_p_" + user.uid;
-
-    // ══ RULE: localStorage = SOURCE OF TRUTH ══
-    // If localStorage has profile → ALWAYS dashboard, no exceptions
-    // Server is only used for:
-    //   1. First time (no cache) → get profile
-    //   2. Background sync (update cache silently)
-    // Server NEVER overrides localStorage to go to setup
-
-    const loadFromCache = () => {
-      const cached = localStorage.getItem(CACHE_KEY);
-      if (!cached) return false;
+    const key    = CACHE(user.uid);
+    const cached = localStorage.getItem(key);
+    
+    // ─── Has localStorage cache → GO TO DASHBOARD (no exceptions) ───
+    if (cached) {
       try {
         const profile = JSON.parse(cached);
-        if (!profile || !profile.companyName) return false;
-        window.__gem.profile = profile;
-        window.__gem.status  = "dashboard";
-        console.log("✓ Dashboard from localStorage");
-        return true;
-      } catch(e) {
-        localStorage.removeItem(CACHE_KEY);
-        return false;
-      }
-    };
-
-    // Step 1: Try localStorage first (instant)
-    if (loadFromCache()) {
-      // Background sync — ONLY updates cache if server has NEWER data
-      // NEVER changes screen status
-      setTimeout(async () => {
-        try {
-          const r = await fetch(`${SERVER}/api/profile?uid=${user.uid}`);
-          if (!r.ok) return;
-          const d = await r.json();
-          if (d?.profile?.companyName) {
-            localStorage.setItem(CACHE_KEY, JSON.stringify(d.profile));
-            console.log("✓ Background sync done");
+        if (profile && profile.companyName) {
+          // Tell React: go to dashboard
+          if (window.__setAppState) {
+            window.__setAppState({ screen: "dashboard", profile, user });
+          } else {
+            window.__pendingState = { screen: "dashboard", profile, user };
           }
-        } catch(e) { /* silently skip */ }
-      }, 2000);
-      return;
-    }
-
-    // Step 2: No localStorage — try server (first time user on this device)
-    console.log("No cache — trying server...");
-    
-    for (let i = 1; i <= 6; i++) {
-      try {
-        const ctrl = new AbortController();
-        const t    = setTimeout(() => ctrl.abort(), 12000);
-        const res  = await fetch(`${SERVER}/api/profile?uid=${user.uid}`, { signal: ctrl.signal });
-        clearTimeout(t);
-
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const data = await res.json();
-
-        if (data?.profile?.companyName) {
-          // Profile found in MongoDB
-          localStorage.setItem(CACHE_KEY, JSON.stringify(data.profile));
-          window.__gem.profile = data.profile;
-          window.__gem.status  = "dashboard";
-          console.log("✓ Profile from MongoDB, cached locally");
-          return;
-        } else {
-          // Confirmed new user — no profile anywhere
-          window.__gem.status = "setup";
-          console.log("→ New user — setup screen");
+          // Silent background sync (never changes screen)
+          fetch(`${SERVER}/api/profile?uid=${user.uid}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(d => { if (d?.profile?.companyName) localStorage.setItem(key, JSON.stringify(d.profile)); })
+            .catch(() => {});
           return;
         }
+      } catch(e) { localStorage.removeItem(key); }
+    }
+
+    // ─── No cache → Try server ───
+    let profile = null;
+    for (let i = 1; i <= 5; i++) {
+      try {
+        const ctrl = new AbortController();
+        setTimeout(() => ctrl.abort(), 12000);
+        const res  = await fetch(`${SERVER}/api/profile?uid=${user.uid}`, { signal: ctrl.signal });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const d = await res.json();
+        if (d?.profile?.companyName) { profile = d.profile; break; }
+        else { profile = null; break; } // confirmed new user
       } catch(e) {
-        console.warn(`Server attempt ${i}/6 failed: ${e.message}`);
-        if (i < 6) await new Promise(r => setTimeout(r, 5000));
+        if (i < 5) await new Promise(r => setTimeout(r, 5000));
       }
     }
-    
-    // Server completely unreachable after all retries
-    // → show setup so user can fill details
-    // (saves to localStorage on submit, works offline)
-    window.__gem.status = "setup";
-    console.warn("Server unreachable — showing setup");
+
+    if (profile) {
+      localStorage.setItem(key, JSON.stringify(profile));
+      if (window.__setAppState) window.__setAppState({ screen: "dashboard", profile, user });
+      else window.__pendingState = { screen: "dashboard", profile, user };
+    } else {
+      if (window.__setAppState) window.__setAppState({ screen: "setup", profile: null, user });
+      else window.__pendingState = { screen: "setup", profile: null, user };
+    }
   });
 </script>
 
@@ -225,10 +166,18 @@ function SetupScreen({ onSaved, onCancel, initialData }) {
     if (!p.apiKey.trim())       { setErr("Please enter your AI API key."); return; }
     setSaving(true); setErr("");
     try {
-      const { user, saveProfile } = window.__gem;
+      const user    = window.__authUser || window.__pendingState?.user;
+      if (!user)    throw new Error("Not logged in. Please refresh and try again.");
       const profile = { ...p, email: user.email, createdAt: new Date().toISOString() };
-      await saveProfile(user.uid, profile);
-      window.__gem.profile = profile;
+      // Save to localStorage immediately
+      localStorage.setItem("gem_p_" + user.uid, JSON.stringify(profile));
+      // Save to server
+      try {
+        await fetch(`${window.__SERVER}/api/profile`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uid: user.uid, profile })
+        });
+      } catch(e) { console.warn("Server save skipped — saved locally"); }
       onSaved(profile);
     } catch(e) { setErr("Failed to save: " + e.message); setSaving(false); }
   };
@@ -267,7 +216,7 @@ function SetupScreen({ onSaved, onCancel, initialData }) {
 
         <div style={{marginTop:"auto"}}>
           <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:"14px",fontSize:11,color:"#64748b",lineHeight:1.7}}>
-            Logged in as <strong style={{color:"#93c5fd"}}>{window.__gem.user?.email}</strong>
+            Logged in as <strong style={{color:"#93c5fd"}}>{window.__authUser?.email}</strong>
           </div>
         </div>
       </div>
@@ -489,7 +438,7 @@ function Dashboard({ profile }) {
 
   // Load history from server on mount
   React.useEffect(() => {
-    const uid = window.__gem.user?.uid;
+    const uid = window.__authUser?.uid;
     if (!uid) return;
     
     // Try localStorage cache first
@@ -673,7 +622,7 @@ Respond in clear English. Return ONLY valid JSON — no markdown, no extra text:
     setAnalyzing(false);
 
     // Save to server + localStorage
-    const uid = window.__gem.user?.uid;
+    const uid = window.__authUser?.uid;
     if (uid) {
       localStorage.setItem("gem_history_" + uid, JSON.stringify(combined));
       const SERVER = (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") 
@@ -690,7 +639,7 @@ Respond in clear English. Return ONLY valid JSON — no markdown, no extra text:
   // Clear history function
   const clearHistory = async () => {
     if (!confirm("Clear all analysis history? This cannot be undone.")) return;
-    const uid = window.__gem.user?.uid;
+    const uid = window.__authUser?.uid;
     setResults([]);
     if (uid) {
       localStorage.removeItem("gem_history_" + uid);
@@ -703,10 +652,7 @@ Respond in clear English. Return ONLY valid JSON — no markdown, no extra text:
     }
   };
 
-  const logout = async () => {
-    try { await window.__gem.auth.signOut(); } catch(e) {}
-    window.location.href="login.html";
-  };
+  const logout = () => window.__signOut();
 
   const vcls=v=>v==="ELIGIBLE"?"vcard ve":v==="NOT_ELIGIBLE"?"vcard vi":"vcard vw";
   const vico=v=>v==="ELIGIBLE"?"✅":v==="NOT_ELIGIBLE"?"❌":"⚠️";
@@ -718,7 +664,7 @@ Respond in clear English. Return ONLY valid JSON — no markdown, no extra text:
     try {
       const { user, saveProfile } = window.__gem;
       await saveProfile(user.uid, updatedProfile);
-      window.__gem.profile = updatedProfile;
+      window.__currentProfile = updatedProfile;
       setCurrentProfile(updatedProfile);
       setEditing(false);
     } catch(e) {
@@ -1200,8 +1146,8 @@ function App() {
     console.log("App mounted, polling for auth status...");
     const poll = setInterval(() => {
       if (!window.__gem) return;
-      const status = window.__gem.status;
-      const profile = window.__gem.profile;
+      const status = window.__appStatus;
+      const profile = window.__currentProfile;
       console.log("Poll status:", status);
 
       if (status === "loading") return;
@@ -1219,8 +1165,8 @@ function App() {
     const timeout = setTimeout(() => {
       clearInterval(poll);
       console.warn("Auth timeout — falling back to setup");
-      if (window.__gem && window.__gem.status === "loading") {
-        window.__gem.status = "setup";
+      if (window.__gem && window.__appStatus === "loading") {
+        window.__appStatus = "setup";
       }
       setScreen("setup");
     }, 25000);
