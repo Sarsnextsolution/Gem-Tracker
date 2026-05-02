@@ -125,6 +125,96 @@ function saveProfileLocal(uid, profile) {
 }
 
 // ══════════════════════════════════════════════
+//  HISTORY STORAGE (analysis results per user)
+// ══════════════════════════════════════════════
+let historyCollection = null;
+const HISTORY_DB = path.join(__dirname, "history.json");
+
+async function getHistory(uid) {
+  if (MONGO_URI) {
+    try {
+      if (!mongoClient) {
+        const { MongoClient } = require("mongodb");
+        mongoClient = new MongoClient(MONGO_URI);
+        await mongoClient.connect();
+      }
+      if (!historyCollection) {
+        historyCollection = mongoClient.db("gemchecker").collection("history");
+      }
+      const doc = await historyCollection.findOne({ uid });
+      return doc ? doc.results : [];
+    } catch(e) {
+      console.error("MongoDB history get error:", e.message);
+      return getHistoryLocal(uid);
+    }
+  }
+  return getHistoryLocal(uid);
+}
+
+async function saveHistory(uid, results) {
+  if (MONGO_URI) {
+    try {
+      if (!mongoClient) {
+        const { MongoClient } = require("mongodb");
+        mongoClient = new MongoClient(MONGO_URI);
+        await mongoClient.connect();
+      }
+      if (!historyCollection) {
+        historyCollection = mongoClient.db("gemchecker").collection("history");
+      }
+      await historyCollection.updateOne(
+        { uid },
+        { $set: { uid, results, updatedAt: new Date() } },
+        { upsert: true }
+      );
+      console.log(`  ✓ History saved to MongoDB (${results.length} results)`);
+      return;
+    } catch(e) { console.error("MongoDB history save error:", e.message); }
+  }
+  saveHistoryLocal(uid, results);
+}
+
+async function clearHistory(uid) {
+  if (MONGO_URI) {
+    try {
+      if (!historyCollection) {
+        const { MongoClient } = require("mongodb");
+        if (!mongoClient) { mongoClient = new MongoClient(MONGO_URI); await mongoClient.connect(); }
+        historyCollection = mongoClient.db("gemchecker").collection("history");
+      }
+      await historyCollection.deleteOne({ uid });
+      console.log(`  ✓ History cleared from MongoDB`);
+      return;
+    } catch(e) { console.error("MongoDB history clear error:", e.message); }
+  }
+  clearHistoryLocal(uid);
+}
+
+function getHistoryLocal(uid) {
+  try {
+    const db = fs.existsSync(HISTORY_DB) ? JSON.parse(fs.readFileSync(HISTORY_DB, "utf8")) : {};
+    return db[uid]?.results || [];
+  } catch { return []; }
+}
+
+function saveHistoryLocal(uid, results) {
+  try {
+    const db = fs.existsSync(HISTORY_DB) ? JSON.parse(fs.readFileSync(HISTORY_DB, "utf8")) : {};
+    db[uid] = { results, updatedAt: new Date().toISOString() };
+    fs.writeFileSync(HISTORY_DB, JSON.stringify(db, null, 2));
+    console.log(`  ✓ History saved locally (${results.length} results)`);
+  } catch(e) { console.error("Local history save error:", e.message); }
+}
+
+function clearHistoryLocal(uid) {
+  try {
+    const db = fs.existsSync(HISTORY_DB) ? JSON.parse(fs.readFileSync(HISTORY_DB, "utf8")) : {};
+    delete db[uid];
+    fs.writeFileSync(HISTORY_DB, JSON.stringify(db, null, 2));
+  } catch(e) { console.error("Local history clear error:", e.message); }
+}
+
+// ══════════════════════════════════════════════
 //  AI PROVIDERS — each uses native PDF support
 // ══════════════════════════════════════════════
 
@@ -299,6 +389,52 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
       }
     });
+    return;
+  }
+
+  // ── GET /api/history ────────────────────────
+  if (pathname === "/api/history" && req.method === "GET") {
+    const uid = parsedUrl.searchParams.get("uid");
+    if (!uid) { res.writeHead(400); res.end(JSON.stringify({ error: "uid required" })); return; }
+    try {
+      const history = await getHistory(uid);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ history }));
+    } catch(e) {
+      res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  // ── POST /api/history ───────────────────────
+  if (pathname === "/api/history" && req.method === "POST") {
+    let body = "";
+    req.on("data", c => { body += c.toString(); });
+    req.on("end", async () => {
+      try {
+        const { uid, results } = JSON.parse(body);
+        if (!uid || !results) { res.writeHead(400); res.end(JSON.stringify({ error: "uid and results required" })); return; }
+        await saveHistory(uid, results);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true }));
+      } catch(e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  // ── DELETE /api/history ─────────────────────
+  if (pathname === "/api/history" && req.method === "DELETE") {
+    const uid = parsedUrl.searchParams.get("uid");
+    if (!uid) { res.writeHead(400); res.end(JSON.stringify({ error: "uid required" })); return; }
+    try {
+      await clearHistory(uid);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ success: true }));
+    } catch(e) {
+      res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+    }
     return;
   }
 
