@@ -32,58 +32,71 @@
   window.__signOut = () => signOut(auth).then(() => window.location.href = "login.html").catch(() => window.location.href = "login.html");
   window.__SERVER  = SERVER;
 
-  onAuthStateChanged(auth, async (user) => {
-    if (!user) { window.location.href = "login.html"; return; }
-{window.__authUser?.email}
-    const key    = CACHE(user.uid);
-    const cached = localStorage.getItem(key);
-    
-    // ─── Has localStorage cache → GO TO DASHBOARD (no exceptions) ───
-    if (cached) {
-      try {
-        const profile = JSON.parse(cached);
-        if (profile && profile.companyName) {
-          // Tell React: go to dashboard
-          if (window.__setAppState) {
-            window.__setAppState({ screen: "dashboard", profile, user });
-          } else {
-            window.__pendingState = { screen: "dashboard", profile, user };
-          }
-          // Silent background sync (never changes screen)
-          fetch(`${SERVER}/api/profile?uid=${user.uid}`)
-            .then(r => r.ok ? r.json() : null)
-            .then(d => { if (d?.profile?.companyName) localStorage.setItem(key, JSON.stringify(d.profile)); })
-            .catch(() => {});
-          return;
-        }
-      } catch(e) { localStorage.removeItem(key); }
-    }
+onAuthStateChanged(auth, async (user) => {
+  if (!user) {
+    window.location.href = "login.html";
+    return;
+  }
 
-    // ─── No cache → Try server ───
-    let profile = null;
-    for (let i = 1; i <= 5; i++) {
-      try {
-        const ctrl = new AbortController();
-        setTimeout(() => ctrl.abort(), 12000);
-        const res  = await fetch(`${SERVER}/api/profile?uid=${user.uid}`, { signal: ctrl.signal });
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const d = await res.json();
-        if (d?.profile?.companyName) { profile = d.profile; break; }
-        else { profile = null; break; } // confirmed new user
-      } catch(e) {
-        if (i < 5) await new Promise(r => setTimeout(r, 5000));
+  // ✅ FIX 1: set global user
+  window.__authUser = user;
+
+  const uid = user.uid;
+  const cacheKey = "gem_p_" + uid;
+
+  // ✅ STEP 1: Check localStorage FIRST (fast)
+  const cached = localStorage.getItem(cacheKey);
+
+  if (cached) {
+    try {
+      const profile = JSON.parse(cached);
+      if (profile && profile.companyName) {
+        console.log("✅ Loaded from cache");
+
+        window.__appStatus = "dashboard";
+        window.__currentProfile = profile;
+        return;
       }
+    } catch(e) {
+      localStorage.removeItem(cacheKey);
+    }
+  }
+
+  // ✅ STEP 2: Fetch from server
+  try {
+    console.log("🌐 Fetching from server...");
+    const res = await fetch(`${window.location.origin}/api/profile?uid=${uid}`);
+    const data = await res.json();
+
+    if (data.profile && data.profile.companyName) {
+      console.log("✅ Loaded from server");
+
+      localStorage.setItem(cacheKey, JSON.stringify(data.profile));
+
+      window.__appStatus = "dashboard";
+      window.__currentProfile = data.profile;
+    } else {
+      console.log("🆕 New user → setup");
+
+      window.__appStatus = "setup";
+      window.__currentProfile = null;
     }
 
-    if (profile) {
-      localStorage.setItem(key, JSON.stringify(profile));
-      if (window.__setAppState) window.__setAppState({ screen: "dashboard", profile, user });
-      else window.__pendingState = { screen: "dashboard", profile, user };
+  } catch (e) {
+    console.error("Server error:", e);
+
+    // ⚠️ IMPORTANT FIX: DON'T RESET USER
+    if (cached) {
+      console.log("⚠️ Using cache fallback");
+
+      const profile = JSON.parse(cached);
+      window.__appStatus = "dashboard";
+      window.__currentProfile = profile;
     } else {
-      if (window.__setAppState) window.__setAppState({ screen: "setup", profile: null, user });
-      else window.__pendingState = { screen: "setup", profile: null, user };
+      window.__appStatus = "setup";
     }
-  });
+  }
+});
 </script>
 
 <script type="text/babel">
@@ -1142,37 +1155,21 @@ function App() {
   const [screen, setScreen]   = useState("loading"); // loading | setup | dashboard
   const [profile, setProfile] = useState(null);
 
-  useEffect(() => {
-    console.log("App mounted, polling for auth status...");
-    const poll = setInterval(() => {
-      if (!window.__gem) return;
-      const status = window.__appStatus;
-      const profile = window.__currentProfile;
-      console.log("Poll status:", status);
-
-      if (status === "loading") return;
-
-      // Got a final status — clear interval and update React
-      clearInterval(poll);
-      console.log("→ Switching to screen:", status);
-
-      if (status === "dashboard") { setProfile(profile); setScreen("dashboard"); }
-      else if (status === "setup") { setScreen("setup"); }
-      else { setScreen("setup"); } // fallback to setup never error
-    }, 200);
-
-    // Safety timeout — fall back to setup (NOT error)
-    const timeout = setTimeout(() => {
-      clearInterval(poll);
-      console.warn("Auth timeout — falling back to setup");
-      if (window.__gem && window.__appStatus === "loading") {
-        window.__appStatus = "setup";
-      }
+ useEffect(() => {
+  const check = setInterval(() => {
+    if (window.__appStatus === "dashboard") {
+      setProfile(window.__currentProfile);
+      setScreen("dashboard");
+      clearInterval(check);
+    }
+    if (window.__appStatus === "setup") {
       setScreen("setup");
-    }, 25000);
+      clearInterval(check);
+    }
+  }, 300);
 
-    return () => { clearInterval(poll); clearTimeout(timeout); };
-  }, []);
+  return () => clearInterval(check);
+}, []);
 
   if (screen === "loading") return <LoadingScreen/>;
 
