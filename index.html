@@ -33,6 +33,7 @@
   window.__SERVER  = SERVER;
 
   onAuthStateChanged(auth, async (user) => {
+    window.__gem = true;
     if (!user) { window.location.href = "login.html"; return; }
 
     const key    = CACHE(user.uid);
@@ -216,7 +217,7 @@ function SetupScreen({ onSaved, onCancel, initialData }) {
 
         <div style={{marginTop:"auto"}}>
           <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:"14px",fontSize:11,color:"#64748b",lineHeight:1.7}}>
-            Logged in as <strong style={{color:"#93c5fd"}}>{window.__authUser?.email}</strong>
+            Logged in as <strong style={{color:"#93c5fd"}}>{(window.__authUser && window.__authUser.email) || "Loading..."}</strong>
           </div>
         </div>
       </div>
@@ -1145,7 +1146,7 @@ function App() {
   useEffect(() => {
     console.log("App mounted, polling for auth status...");
     const poll = setInterval(() => {
-      if (!window.__gem) return;
+     if (typeof window.__appStatus === "undefined") return;
       const status = window.__appStatus;
       const profile = window.__currentProfile;
       console.log("Poll status:", status);
