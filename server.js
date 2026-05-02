@@ -61,49 +61,79 @@ function httpsPost(hostname, path, headers, body) {
 }
 
 // ══════════════════════════════════════════════
-//  MONGODB STORAGE
+//  MONGODB STORAGE (with auto-reconnect)
 // ══════════════════════════════════════════════
 let mongoClient = null;
-let profilesCollection = null;
+let mongoDB     = null;
 const LOCAL_DB = path.join(__dirname, "profiles.json");
 
-async function getProfile(uid) {
-  if (MONGO_URI) {
+// Get or create MongoDB connection (reconnect if dropped)
+async function getMongoDB() {
+  if (!MONGO_URI) return null;
+  
+  // Check if existing connection still alive
+  if (mongoClient && mongoDB) {
     try {
-      if (!mongoClient) {
-        const { MongoClient } = require("mongodb");
-        mongoClient = new MongoClient(MONGO_URI);
-        await mongoClient.connect();
-        profilesCollection = mongoClient.db("gemchecker").collection("profiles");
-        console.log("✓ MongoDB connected!");
-      }
-      const doc = await profilesCollection.findOne({ uid });
+      // Ping to verify connection is alive
+      await mongoDB.admin().ping();
+      return mongoDB;
+    } catch(e) {
+      console.warn("MongoDB ping failed, reconnecting...");
+      try { await mongoClient.close(); } catch {}
+      mongoClient = null;
+      mongoDB = null;
+    }
+  }
+  
+  // Create new connection
+  try {
+    const { MongoClient } = require("mongodb");
+    mongoClient = new MongoClient(MONGO_URI, {
+      serverSelectionTimeoutMS: 10000,
+      connectTimeoutMS: 10000,
+    });
+    await mongoClient.connect();
+    mongoDB = mongoClient.db("gemchecker");
+    console.log("✓ MongoDB connected!");
+    return mongoDB;
+  } catch(e) {
+    console.error("MongoDB connect failed:", e.message);
+    mongoClient = null;
+    mongoDB = null;
+    return null;
+  }
+}
+
+async function getProfile(uid) {
+  const db = await getMongoDB();
+  if (db) {
+    try {
+      const doc = await db.collection("profiles").findOne({ uid });
+      console.log(`  Profile lookup for ${uid.slice(0,8)}: ${doc ? "FOUND" : "NOT FOUND"}`);
       return doc ? doc.profile : null;
     } catch(e) {
-      console.error("MongoDB error:", e.message);
-      return getProfileLocal(uid);
+      console.error("MongoDB read error:", e.message);
     }
   }
   return getProfileLocal(uid);
 }
 
 async function saveProfile(uid, profile) {
-  if (MONGO_URI) {
+  const db = await getMongoDB();
+  if (db) {
     try {
-      if (!mongoClient) {
-        const { MongoClient } = require("mongodb");
-        mongoClient = new MongoClient(MONGO_URI);
-        await mongoClient.connect();
-        profilesCollection = mongoClient.db("gemchecker").collection("profiles");
-      }
-      await profilesCollection.updateOne(
+      await db.collection("profiles").updateOne(
         { uid },
         { $set: { uid, profile, updatedAt: new Date() } },
         { upsert: true }
       );
       console.log(`  ✓ Profile saved to MongoDB (${uid.slice(0,8)}...)`);
+      // Also save locally as backup
+      saveProfileLocal(uid, profile);
       return;
-    } catch(e) { console.error("MongoDB save error:", e.message); }
+    } catch(e) {
+      console.error("MongoDB save error:", e.message);
+    }
   }
   saveProfileLocal(uid, profile);
 }
@@ -127,47 +157,32 @@ function saveProfileLocal(uid, profile) {
 // ══════════════════════════════════════════════
 //  HISTORY STORAGE (analysis results per user)
 // ══════════════════════════════════════════════
-let historyCollection = null;
 const HISTORY_DB = path.join(__dirname, "history.json");
 
 async function getHistory(uid) {
-  if (MONGO_URI) {
+  const db = await getMongoDB();
+  if (db) {
     try {
-      if (!mongoClient) {
-        const { MongoClient } = require("mongodb");
-        mongoClient = new MongoClient(MONGO_URI);
-        await mongoClient.connect();
-      }
-      if (!historyCollection) {
-        historyCollection = mongoClient.db("gemchecker").collection("history");
-      }
-      const doc = await historyCollection.findOne({ uid });
+      const doc = await db.collection("history").findOne({ uid });
       return doc ? doc.results : [];
     } catch(e) {
       console.error("MongoDB history get error:", e.message);
-      return getHistoryLocal(uid);
     }
   }
   return getHistoryLocal(uid);
 }
 
 async function saveHistory(uid, results) {
-  if (MONGO_URI) {
+  const db = await getMongoDB();
+  if (db) {
     try {
-      if (!mongoClient) {
-        const { MongoClient } = require("mongodb");
-        mongoClient = new MongoClient(MONGO_URI);
-        await mongoClient.connect();
-      }
-      if (!historyCollection) {
-        historyCollection = mongoClient.db("gemchecker").collection("history");
-      }
-      await historyCollection.updateOne(
+      await db.collection("history").updateOne(
         { uid },
         { $set: { uid, results, updatedAt: new Date() } },
         { upsert: true }
       );
       console.log(`  ✓ History saved to MongoDB (${results.length} results)`);
+      saveHistoryLocal(uid, results);
       return;
     } catch(e) { console.error("MongoDB history save error:", e.message); }
   }
@@ -175,14 +190,10 @@ async function saveHistory(uid, results) {
 }
 
 async function clearHistory(uid) {
-  if (MONGO_URI) {
+  const db = await getMongoDB();
+  if (db) {
     try {
-      if (!historyCollection) {
-        const { MongoClient } = require("mongodb");
-        if (!mongoClient) { mongoClient = new MongoClient(MONGO_URI); await mongoClient.connect(); }
-        historyCollection = mongoClient.db("gemchecker").collection("history");
-      }
-      await historyCollection.deleteOne({ uid });
+      await db.collection("history").deleteOne({ uid });
       console.log(`  ✓ History cleared from MongoDB`);
       return;
     } catch(e) { console.error("MongoDB history clear error:", e.message); }
