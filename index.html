@@ -439,6 +439,32 @@ function Dashboard({ profile }) {
   const [files, setFiles]         = useState([]);
   const [analyzing, setAnalyzing] = useState(false);
   const [results, setResults]     = useState([]);
+
+  // Load history from server on mount
+  React.useEffect(() => {
+    const uid = window.__gem.user?.uid;
+    if (!uid) return;
+    
+    // Try localStorage cache first
+    const cached = localStorage.getItem("gem_history_" + uid);
+    if (cached) {
+      try { setResults(JSON.parse(cached)); } catch(e) {}
+    }
+    
+    // Then sync from server
+    const SERVER = (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") 
+      ? "http://localhost:3000" : window.location.origin;
+    fetch(`${SERVER}/api/history?uid=${uid}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d?.history) {
+          setResults(d.history);
+          localStorage.setItem("gem_history_" + uid, JSON.stringify(d.history));
+          console.log("✓ History loaded:", d.history.length, "results");
+        }
+      })
+      .catch(e => console.warn("History sync skipped:", e.message));
+  }, []);
   const [loadMsg, setLoadMsg]     = useState("");
   const [lStep, setLStep]         = useState(0);
   const [editing, setEditing]     = useState(false);
@@ -594,7 +620,40 @@ Respond in clear English. Return ONLY valid JSON — no markdown, no extra text:
         catch{newR.push({file:file.name,error:"Could not parse AI response. Raw: "+clean.slice(0,300)});}
       }catch(e){newR.push({file:file.name,error:e.message});}
     }
-    setResults(newR); setAnalyzing(false);
+    // Combine new results with existing
+    const combined = [...results, ...newR];
+    setResults(combined);
+    setAnalyzing(false);
+
+    // Save to server + localStorage
+    const uid = window.__gem.user?.uid;
+    if (uid) {
+      localStorage.setItem("gem_history_" + uid, JSON.stringify(combined));
+      const SERVER = (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") 
+        ? "http://localhost:3000" : window.location.origin;
+      fetch(`${SERVER}/api/history`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ uid, results: combined })
+      }).then(r => { if(r.ok) console.log("✓ History saved to server"); })
+        .catch(e => console.warn("History save skipped:", e.message));
+    }
+  };
+
+  // Clear history function
+  const clearHistory = async () => {
+    if (!confirm("Clear all analysis history? This cannot be undone.")) return;
+    const uid = window.__gem.user?.uid;
+    setResults([]);
+    if (uid) {
+      localStorage.removeItem("gem_history_" + uid);
+      const SERVER = (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") 
+        ? "http://localhost:3000" : window.location.origin;
+      try {
+        await fetch(`${SERVER}/api/history?uid=${uid}`, { method: "DELETE" });
+        console.log("✓ History cleared");
+      } catch(e) { console.warn("Clear failed:", e.message); }
+    }
   };
 
   const logout = async () => {
@@ -749,12 +808,20 @@ Respond in clear English. Return ONLY valid JSON — no markdown, no extra text:
 
           {view==="results"&&(
             <>
-              <div className="panel-header">
-                <div className="panel-title">Analysis Results</div>
-                <div className="panel-sub">
-                  {results.length} document{results.length!==1?"s":""} analyzed &nbsp;•&nbsp; {profile.companyName}
-                  {results.length>0&&<>&nbsp;•&nbsp;<span style={{color:"#16a34a",fontWeight:500}}>{results.filter(r=>!r.error&&r.eligibilityVerdict==="ELIGIBLE").length} eligible</span>&nbsp;/&nbsp;<span style={{color:"#dc2626",fontWeight:500}}>{results.filter(r=>!r.error&&r.eligibilityVerdict==="NOT_ELIGIBLE").length} not eligible</span></>}
+              <div className="panel-header" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div>
+                  <div className="panel-title">Analysis Results</div>
+                  <div className="panel-sub">
+                    {results.length} document{results.length!==1?"s":""} analyzed &nbsp;•&nbsp; {profile.companyName}
+                    {results.length>0&&<>&nbsp;•&nbsp;<span style={{color:"#16a34a",fontWeight:500}}>{results.filter(r=>!r.error&&r.eligibilityVerdict==="ELIGIBLE").length} eligible</span>&nbsp;/&nbsp;<span style={{color:"#dc2626",fontWeight:500}}>{results.filter(r=>!r.error&&r.eligibilityVerdict==="NOT_ELIGIBLE").length} not eligible</span></>}
+                  </div>
                 </div>
+                {results.length > 0 && (
+                  <button onClick={clearHistory} style={{background:"transparent",color:"#dc2626",border:"1px solid #fca5a5",padding:"7px 14px",borderRadius:8,fontSize:11,cursor:"pointer",fontWeight:500,transition:"all 0.15s"}}
+                    onMouseOver={e=>e.target.style.background="#fff1f2"} onMouseOut={e=>e.target.style.background="transparent"}>
+                    🗑 Clear History
+                  </button>
+                )}
               </div>
               {analyzing&&(
                 <div className="lcard">
