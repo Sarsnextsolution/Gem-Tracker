@@ -1,14 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>GEM Tender Checker</title>
-
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet"/>
-<link rel="stylesheet" href="style.css"/>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+  <meta http-equiv="Pragma" content="no-cache"/>
+  <meta http-equiv="Expires" content="0"/>
+  <meta name="version" content="v1777690139"/>
+  <title>GEM Tender Eligibility Checker</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="style.css"/>
 </head>
-
 <body>
 <div id="root"></div>
 
@@ -16,166 +18,1170 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-<!-- 🔥 AUTH SCRIPT -->
 <script type="module">
-import { auth } from "./firebase-config.js";
-import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  import { auth } from "./firebase-config.js";
+  import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
-window.__signOut = () => signOut(auth).then(()=>location.href="login.html");
+  const SERVER = (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+    ? "http://localhost:3000"
+    : window.location.origin;
 
-onAuthStateChanged(auth, async (user) => {
-  if (!user) {
-    location.href = "login.html";
-    return;
-  }
+  const CACHE  = uid => "gem_p_" + uid;
 
-  window.__authUser = user;
+  // Store signOut for React
+  window.__signOut = () => signOut(auth).then(() => window.location.href = "login.html").catch(() => window.location.href = "login.html");
+  window.__SERVER  = SERVER;
 
-  const uid = user.uid;
-  const cacheKey = "gem_p_" + uid;
-  const cached = localStorage.getItem(cacheKey);
+  onAuthStateChanged(auth, async (user) => {
+    if (!user) { window.location.href = "login.html"; return; }
 
-  // ✅ CACHE FIRST
-  if (cached) {
-    try {
-      const profile = JSON.parse(cached);
-      if (profile?.companyName) {
-        window.__appStatus = "dashboard";
-        window.__currentProfile = profile;
-        return;
-      }
-    } catch {
-      localStorage.removeItem(cacheKey);
-    }
-  }
-
-  // ✅ SERVER FETCH
-  try {
-    const res = await fetch(`${window.location.origin}/api/profile?uid=${uid}`);
-    const data = await res.json();
-
-    if (data.profile) {
-      localStorage.setItem(cacheKey, JSON.stringify(data.profile));
-      window.__appStatus = "dashboard";
-      window.__currentProfile = data.profile;
-    } else {
-      window.__appStatus = "setup";
-    }
-
-  } catch {
+    const key    = CACHE(user.uid);
+    const cached = localStorage.getItem(key);
+    
+    // ─── Has localStorage cache → GO TO DASHBOARD (no exceptions) ───
     if (cached) {
-      window.__appStatus = "dashboard";
-      window.__currentProfile = JSON.parse(cached);
-    } else {
-      window.__appStatus = "setup";
+      try {
+        const profile = JSON.parse(cached);
+        if (profile && profile.companyName) {
+          // Tell React: go to dashboard
+          if (window.__setAppState) {
+            window.__setAppState({ screen: "dashboard", profile, user });
+          } else {
+            window.__pendingState = { screen: "dashboard", profile, user };
+          }
+          // Silent background sync (never changes screen)
+          fetch(`${SERVER}/api/profile?uid=${user.uid}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(d => { if (d?.profile?.companyName) localStorage.setItem(key, JSON.stringify(d.profile)); })
+            .catch(() => {});
+          return;
+        }
+      } catch(e) { localStorage.removeItem(key); }
     }
-  }
-});
+
+    // ─── No cache → Try server ───
+    let profile = null;
+    for (let i = 1; i <= 5; i++) {
+      try {
+        const ctrl = new AbortController();
+        setTimeout(() => ctrl.abort(), 12000);
+        const res  = await fetch(`${SERVER}/api/profile?uid=${user.uid}`, { signal: ctrl.signal });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const d = await res.json();
+        if (d?.profile?.companyName) { profile = d.profile; break; }
+        else { profile = null; break; } // confirmed new user
+      } catch(e) {
+        if (i < 5) await new Promise(r => setTimeout(r, 5000));
+      }
+    }
+
+    if (profile) {
+      localStorage.setItem(key, JSON.stringify(profile));
+      if (window.__setAppState) window.__setAppState({ screen: "dashboard", profile, user });
+      else window.__pendingState = { screen: "dashboard", profile, user };
+    } else {
+      if (window.__setAppState) window.__setAppState({ screen: "setup", profile: null, user });
+      else window.__pendingState = { screen: "setup", profile: null, user };
+    }
+  });
 </script>
 
-<!-- 🔥 REACT APP -->
 <script type="text/babel">
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef } = React;
 
-/* LOADING */
-function LoadingScreen(){
+// Auto-detect API URL: local vs production
+const API_URL = (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+  ? "http://localhost:3000/api/analyze"
+  : window.location.origin + "/api/analyze";
+
+const CATS   = ["IT / Software","Web / App Design","Data Entry","Consulting","Training","Printing","Office Equipment","Manpower","Security","Housekeeping","Civil / Construction","Electrical","Furniture","Medical Supplies","Agriculture"];
+const STATES = ["Telangana","Andhra Pradesh","Maharashtra","Karnataka","Tamil Nadu","Delhi","UP","Gujarat","Rajasthan","Other"];
+
+/* ══════════════════════════════════════
+   SCREEN 1 — LOADING
+══════════════════════════════════════ */
+function LoadingScreen() {
+  const [msg, setMsg] = useState("Loading your account...");
+  const [seconds, setSeconds] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => setSeconds(s => s + 1), 1000);
+    const t1 = setTimeout(() => setMsg("Connecting to server..."), 3000);
+    const t2 = setTimeout(() => setMsg("Server waking up (free tier) — please wait..."), 8000);
+    const t3 = setTimeout(() => setMsg("Almost ready, fetching your data..."), 25000);
+    const t4 = setTimeout(() => setMsg("Final connection retry..."), 45000);
+    return () => { 
+      clearInterval(interval);
+      clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4);
+    };
+  }, []);
+
   return (
-    <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <h3>Connecting to server...</h3>
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:14,background:"#f0f2f7",padding:20}}>
+      <div style={{width:48,height:48,border:"3px solid #e2e8f0",borderTopColor:"#2563eb",borderRadius:"50%",animation:"sp 0.8s linear infinite"}}></div>
+      <div style={{fontSize:14,color:"#0f172a",fontWeight:600,textAlign:"center",maxWidth:420}}>{msg}</div>
+      <div style={{fontSize:11,color:"#94a3b8"}}>{seconds}s elapsed</div>
+      {seconds >= 5 && (
+        <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:10,padding:"12px 18px",fontSize:11,color:"#1e40af",maxWidth:420,textAlign:"center",lineHeight:1.7}}>
+          ☕ <strong>Free server is waking up</strong><br/>
+          The Render.com free tier sleeps when not in use. First request takes 30-60 seconds. Your data is safe and will load shortly.
+        </div>
+      )}
+      <style>{`@keyframes sp{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 }
 
-/* SETUP SCREEN */
-function SetupScreen({ onSaved }) {
-  const user = window.__authUser; // ✅ FIX
+/* ══════════════════════════════════════
+   SCREEN 2 — COMPANY SETUP
+══════════════════════════════════════ */
+function SetupScreen({ onSaved, onCancel, initialData }) {
+  // Default profile structure
+  const defaults = {
+    companyName:"", regNo:"", incDate:"2025-08-01",
+    type:"Startup (DPIIT Registered)", turnover:"0",
+    dpiit:false, msme:false, iso9001:false, iso27001:false, nasscom:false, 
+    gem_seller:false, startupIndia:false, oem:false, pan:false, gst:false,
+    panNumber:"", gstin:"",
+    doc_oem_cert:false, doc_oem_auth:false, doc_experience:false, doc_turnover:false,
+    doc_balance_sheet:false, doc_past_orders:false, doc_delivery_cert:false, 
+    doc_itr:false, doc_bank_stmt:false, doc_pq_docs:false, doc_mou:false, doc_workforce:false,
+    state:"Telangana", cats:["IT / Software","Web / App Design"],
+    desc:"", emp:"1-10", aiProvider:"gemini", apiKey:""
+  };
+  
+  // Merge initialData with defaults — ALL fields exist + existing values preserved
+  const initialState = initialData 
+    ? { ...defaults, ...initialData }
+    : { ...defaults, dpiit:true };
+  
+  const [p, setP] = useState(initialState);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr]       = useState("");
 
-  const [company, setCompany] = useState("");
+  const togCat = c => setP(prev => ({...prev, cats: prev.cats.includes(c) ? prev.cats.filter(x=>x!==c) : [...prev.cats,c]}));
 
-  const save = () => {
-    if (!company) return alert("Enter company name");
-
-    const profile = {
-      companyName: company,
-      email: user.email
-    };
-
-    localStorage.setItem("gem_p_" + user.uid, JSON.stringify(profile));
-
-    fetch(window.location.origin + "/api/profile", {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({ uid:user.uid, profile })
-    });
-
-    onSaved(profile);
+  const save = async () => {
+    if (!p.companyName.trim()) { setErr("Company name is required."); return; }
+    if (!p.apiKey.trim())       { setErr("Please enter your AI API key."); return; }
+    setSaving(true); setErr("");
+    try {
+      const user    = window.__authUser || window.__pendingState?.user;
+      if (!user)    throw new Error("Not logged in. Please refresh and try again.");
+      const profile = { ...p, email: user.email, createdAt: new Date().toISOString() };
+      // Save to localStorage immediately
+      localStorage.setItem("gem_p_" + user.uid, JSON.stringify(profile));
+      // Save to server
+      try {
+        await fetch(`${window.__SERVER}/api/profile`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uid: user.uid, profile })
+        });
+      } catch(e) { console.warn("Server save skipped — saved locally"); }
+      onSaved(profile);
+    } catch(e) { setErr("Failed to save: " + e.message); setSaving(false); }
   };
 
+  const providerConfig = {
+    gemini:   { label:"Gemini API Key",   placeholder:"AIzaSy...",     hint:"Free — get at aistudio.google.com/app/apikey",          color:"#2e7d32", bg:"#e8f5e9" },
+    pagegrid: { label:"PageGrid API Key", placeholder:"sk-pgrid-...",  hint:"Affordable Claude — get at pagegrid.in/dashboard",       color:"#5b21b6", bg:"#ede9fe" },
+    openai:   { label:"OpenAI API Key",   placeholder:"sk-...",        hint:"Paid — get at platform.openai.com/api-keys",            color:"#1565c0", bg:"#e3f2fd" },
+    claude:   { label:"Claude API Key",   placeholder:"sk-ant-...",    hint:"Paid — get at console.anthropic.com",                   color:"#b45309", bg:"#fce8db" },
+  };
+
+  const prov = providerConfig[p.aiProvider];
+
   return (
-    <div style={{padding:40}}>
-      <h2>Set Up Company Profile</h2>
+    <div style={{minHeight:"100vh",display:"grid",gridTemplateColumns:"300px 1fr"}}>
 
-      <p>Logged in as <b>{user?.email || "Loading..."}</b></p>
+      {/* Left */}
+      <div style={{background:"linear-gradient(160deg,#0a1628,#1e3a5f)",padding:"40px 28px",display:"flex",flexDirection:"column"}}>
+        <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:40}}>
+          <div style={{width:30,height:30,background:"#1d4ed8",borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Space Grotesk,sans-serif",fontWeight:700,fontSize:11,color:"#fff"}}>GEM</div>
+          <span style={{fontFamily:"Space Grotesk,sans-serif",fontSize:14,fontWeight:600,color:"#fff"}}>GEM Tender Checker</span>
+        </div>
+        <div style={{background:"rgba(37,99,235,0.2)",border:"1px solid rgba(37,99,235,0.3)",borderRadius:20,padding:"3px 10px",fontSize:10,fontWeight:700,color:"#93c5fd",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:16,width:"fit-content"}}>{initialData ? "Edit Profile" : "Step 2 of 2"}</div>
+        <div style={{fontFamily:"Space Grotesk,sans-serif",fontSize:20,fontWeight:700,color:"#f1f5f9",marginBottom:10,lineHeight:1.3}}>{initialData ? "Update Your Company Profile" : "Set Up Your Company Profile"}</div>
+        <div style={{fontSize:12,color:"#64748b",lineHeight:1.8,marginBottom:32}}>{initialData ? "Update your details. Changes will be saved immediately." : "This is a one-time setup. Your details will be saved and automatically used for all future tender analysis."}</div>
 
-      <input
-        placeholder="Company Name"
-        value={company}
-        onChange={e=>setCompany(e.target.value)}
-      />
+        {[["🏛","One-time setup","Fill once, used forever for all tender analysis"],
+          ["🚀","Startup & MSE detection","Relaxations automatically identified from each tender"],
+          ["🔑","Your own AI key","You control your usage — no shared limits"]
+        ].map(([icon,title,desc]) => (
+          <div key={title} style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:18}}>
+            <div style={{width:32,height:32,background:"rgba(37,99,235,0.2)",border:"1px solid rgba(37,99,235,0.3)",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0}}>{icon}</div>
+            <div><div style={{fontSize:12,fontWeight:600,color:"#e2e8f0",marginBottom:2}}>{title}</div><div style={{fontSize:11,color:"#64748b",lineHeight:1.5}}>{desc}</div></div>
+          </div>
+        ))}
 
-      <br/><br/>
+        <div style={{marginTop:"auto"}}>
+          <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:"14px",fontSize:11,color:"#64748b",lineHeight:1.7}}>
+            Logged in as <strong style={{color:"#93c5fd"}}>{window.__authUser?.email}</strong>
+          </div>
+        </div>
+      </div>
 
-      <button onClick={save}>Save & Continue</button>
+      {/* Right */}
+      <div style={{background:"#f0f2f7",padding:"28px 36px",overflowY:"auto",height:"100vh"}}>
+        {err && <div style={{background:"#fff1f2",border:"1px solid #fca5a5",borderRadius:9,padding:"10px 14px",fontSize:12,color:"#dc2626",marginBottom:16}}>{err}</div>}
+
+        {/* Basic Info */}
+        <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",padding:"20px 24px",marginBottom:14}}>
+          <div style={{fontFamily:"Space Grotesk,sans-serif",fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14,display:"flex",alignItems:"center",gap:8}}>
+            Basic Information <span style={{flex:1,height:1,background:"#e2e8f0",display:"inline-block"}}></span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+            {[["Company Name *","text","companyName","e.g. Sai Tech Solutions Pvt Ltd"],
+              ["Registration / CIN No","text","regNo","CIN number"],
+              ["PAN Number","text","panNumber","ABCDE1234F"],
+              ["GSTIN","text","gstin","36XXXXX..."]
+            ].map(([label,type,key,ph]) => (
+              <div key={key}>
+                <div style={{fontSize:10,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:"0.4px",marginBottom:4}}>{label}</div>
+                <input style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8,fontSize:13,fontFamily:"DM Sans,sans-serif",color:"#0f172a",background:"#f8fafc",outline:"none"}}
+                  type={type} value={p[key]} placeholder={ph}
+                  onChange={e=>setP({...p,[key]:e.target.value})}
+                  onFocus={e=>{e.target.style.borderColor="#2563eb";e.target.style.background="#fff"}}
+                  onBlur={e=>{e.target.style.borderColor="#e2e8f0";e.target.style.background="#f8fafc"}}
+                />
+              </div>
+            ))}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
+            <div>
+              <div style={{fontSize:10,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:"0.4px",marginBottom:4}}>Company Type</div>
+              <select style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8,fontSize:13,fontFamily:"DM Sans,sans-serif",color:"#0f172a",background:"#f8fafc",outline:"none"}}
+                value={p.type} onChange={e=>setP({...p,type:e.target.value})}>
+                {["Startup (DPIIT Registered)","Pvt Ltd","OPC","Partnership","Proprietorship","LLP"].map(x=><option key={x}>{x}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{fontSize:10,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:"0.4px",marginBottom:4}}>State</div>
+              <select style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8,fontSize:13,fontFamily:"DM Sans,sans-serif",color:"#0f172a",background:"#f8fafc",outline:"none"}}
+                value={p.state} onChange={e=>setP({...p,state:e.target.value})}>
+                {STATES.map(x=><option key={x}>{x}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{fontSize:10,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:"0.4px",marginBottom:4}}>Team Size</div>
+              <select style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8,fontSize:13,fontFamily:"DM Sans,sans-serif",color:"#0f172a",background:"#f8fafc",outline:"none"}}
+                value={p.emp} onChange={e=>setP({...p,emp:e.target.value})}>
+                {["1-10","11-25","26-50","50+"].map(x=><option key={x}>{x}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{fontSize:10,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:"0.4px",marginBottom:4}}>Turnover (₹ Lakhs)</div>
+              <input style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8,fontSize:13,fontFamily:"DM Sans,sans-serif",color:"#0f172a",background:"#f8fafc",outline:"none"}}
+                value={p.turnover} placeholder="0" onChange={e=>setP({...p,turnover:e.target.value})}
+                onFocus={e=>{e.target.style.borderColor="#2563eb";e.target.style.background="#fff"}}
+                onBlur={e=>{e.target.style.borderColor="#e2e8f0";e.target.style.background="#f8fafc"}}
+              />
+            </div>
+            <div>
+              <div style={{fontSize:10,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:"0.4px",marginBottom:4}}>Incorporation Date</div>
+              <input type="date" style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8,fontSize:13,fontFamily:"DM Sans,sans-serif",color:"#0f172a",background:"#f8fafc",outline:"none"}}
+                value={p.incDate} onChange={e=>setP({...p,incDate:e.target.value})}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Certifications */}
+        <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",padding:"20px 24px",marginBottom:14}}>
+          <div style={{fontFamily:"Space Grotesk,sans-serif",fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:6,display:"flex",alignItems:"center",gap:8}}>
+            Certifications & Registrations <span style={{flex:1,height:1,background:"#e2e8f0",display:"inline-block"}}></span>
+          </div>
+          <div style={{fontSize:11,color:"#64748b",marginBottom:12}}>Select all that apply — AI will use these to check your eligibility automatically</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+            {[
+              {k:"dpiit",   l:"DPIIT Startup",   color:"#2563eb", desc:"Startup India registered"},
+              {k:"msme",    l:"MSME / Udyam",    color:"#16a34a", desc:"Udyam registration"},
+              {k:"iso9001", l:"ISO 9001",         color:"#d97706", desc:"Quality management"},
+              {k:"iso27001",l:"ISO 27001",        color:"#7c3aed", desc:"Information security"},
+              {k:"nasscom", l:"NASSCOM Member",   color:"#0891b2", desc:"IT industry body"},
+              {k:"gem_seller",l:"GeM Seller",     color:"#dc2626", desc:"Registered on GeM portal"},
+              {k:"startupIndia",l:"Startup India",color:"#059669", desc:"Startup India recognized"},
+              {k:"oem",     l:"OEM / Manufacturer",color:"#b45309",desc:"Original equipment maker"},
+              {k:"pan",     l:"PAN Card",         color:"#374151", desc:"Income tax PAN"},
+              {k:"gst",     l:"GST Registered",   color:"#065f46", desc:"GST registration"},
+            ].map(({k,l,color,desc})=>(
+              <div key={k}
+                onClick={()=>setP({...p,[k]:!p[k]})}
+                style={{display:"flex",alignItems:"flex-start",gap:8,padding:"10px 12px",border:`1.5px solid ${p[k]?color:"#e2e8f0"}`,borderRadius:9,cursor:"pointer",background:p[k]?`${color}11`:"#f8fafc",transition:"all 0.15s",userSelect:"none"}}>
+                <div style={{width:15,height:15,borderRadius:3,border:`1.5px solid ${p[k]?color:"#cbd5e1"}`,background:p[k]?color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,color:"#fff",fontWeight:700,flexShrink:0,marginTop:1}}>{p[k]&&"✓"}</div>
+                <div>
+                  <div style={{fontSize:11,fontWeight:600,color:p[k]?color:"#0f172a"}}>{l}</div>
+                  <div style={{fontSize:10,color:"#94a3b8",marginTop:1}}>{desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Documents Available */}
+        <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",padding:"20px 24px",marginBottom:14}}>
+          <div style={{fontFamily:"Space Grotesk,sans-serif",fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:6,display:"flex",alignItems:"center",gap:8}}>
+            Documents You Have <span style={{flex:1,height:1,background:"#e2e8f0",display:"inline-block"}}></span>
+          </div>
+          <div style={{fontSize:11,color:"#64748b",marginBottom:12}}>Select documents you can submit — AI will check if you meet the tender requirements</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+            {[
+              {k:"doc_oem_cert",      l:"OEM Certificate",           cat:"OEM",        desc:"You are manufacturer/OEM"},
+              {k:"doc_oem_auth",      l:"OEM Authorization Letter",  cat:"OEM",        desc:"Authorized by OEM to sell"},
+              {k:"doc_experience",    l:"Experience Certificate",     cat:"Experience", desc:"Past work experience proof"},
+              {k:"doc_turnover",      l:"Turnover Certificate",       cat:"Turnover",   desc:"CA certified turnover"},
+              {k:"doc_balance_sheet", l:"Audited Balance Sheet",      cat:"Turnover",   desc:"Audited financial statements"},
+              {k:"doc_past_orders",   l:"Past Order Copies",          cat:"Experience", desc:"Previous supply/work orders"},
+              {k:"doc_delivery_cert", l:"Delivery/CRAC Certificate",  cat:"Experience", desc:"Proof of delivery accepted"},
+              {k:"doc_itr",           l:"Income Tax Returns",         cat:"Turnover",   desc:"ITR for last 3 years"},
+              {k:"doc_bank_stmt",     l:"Bank Statement",             cat:"Financial",  desc:"6 months bank statement"},
+              {k:"doc_pq_docs",       l:"Pre-Qualification Docs",     cat:"General",    desc:"PQ criteria documents"},
+              {k:"doc_mou",           l:"MOU / Partnership Deed",     cat:"General",    desc:"Business agreements"},
+              {k:"doc_workforce",     l:"Workforce / Staff Proof",    cat:"General",    desc:"Employee details"},
+            ].map(({k,l,cat,desc})=>{
+              const catColors = {OEM:"#7c3aed",Experience:"#0891b2",Turnover:"#16a34a",Financial:"#d97706",General:"#475569"};
+              const cc = catColors[cat]||"#475569";
+              return (
+                <div key={k}
+                  onClick={()=>setP({...p,[k]:!p[k]})}
+                  style={{display:"flex",alignItems:"flex-start",gap:8,padding:"10px 12px",border:`1.5px solid ${p[k]?cc:"#e2e8f0"}`,borderRadius:9,cursor:"pointer",background:p[k]?`${cc}11`:"#f8fafc",transition:"all 0.15s",userSelect:"none"}}>
+                  <div style={{width:15,height:15,borderRadius:3,border:`1.5px solid ${p[k]?cc:"#cbd5e1"}`,background:p[k]?cc:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,color:"#fff",fontWeight:700,flexShrink:0,marginTop:1}}>{p[k]&&"✓"}</div>
+                  <div>
+                    <div style={{fontSize:11,fontWeight:600,color:p[k]?cc:"#0f172a"}}>{l}</div>
+                    <div style={{display:"flex",alignItems:"center",gap:4,marginTop:2}}>
+                      <span style={{background:`${cc}22`,color:cc,fontSize:9,padding:"1px 5px",borderRadius:4,fontWeight:600}}>{cat}</span>
+                      <span style={{fontSize:9,color:"#94a3b8"}}>{desc}</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Categories */}
+        <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",padding:"20px 24px",marginBottom:14}}>
+          <div style={{fontFamily:"Space Grotesk,sans-serif",fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14,display:"flex",alignItems:"center",gap:8}}>
+            Work Categories <span style={{flex:1,height:1,background:"#e2e8f0",display:"inline-block"}}></span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:7}}>
+            {CATS.map(c=>(
+              <div key={c} onClick={()=>togCat(c)}
+                style={{display:"flex",alignItems:"center",gap:6,padding:"7px 9px",border:`1px solid ${p.cats.includes(c)?"#2563eb":"#e2e8f0"}`,borderRadius:7,cursor:"pointer",background:p.cats.includes(c)?"#eff6ff":"#f8fafc",color:p.cats.includes(c)?"#1d4ed8":"#475569",fontSize:11,fontWeight:p.cats.includes(c)?600:400,transition:"all 0.12s",userSelect:"none"}}>
+                <div style={{width:12,height:12,borderRadius:3,border:`1.5px solid ${p.cats.includes(c)?"#2563eb":"#cbd5e1"}`,background:p.cats.includes(c)?"#2563eb":"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:7,color:"#fff",fontWeight:700,flexShrink:0}}>{p.cats.includes(c)&&"✓"}</div>
+                {c}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* AI Provider & Key */}
+        <div style={{background:"#fff",borderRadius:12,border:"1px solid #e2e8f0",padding:"20px 24px",marginBottom:14}}>
+          <div style={{fontFamily:"Space Grotesk,sans-serif",fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:14,display:"flex",alignItems:"center",gap:8}}>
+            AI Provider &amp; API Key <span style={{flex:1,height:1,background:"#e2e8f0",display:"inline-block"}}></span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
+            {Object.entries({
+              gemini:  {name:"Gemini",   tag:"Free",logo:"G",  logoBg:"#e8f5e9",logoColor:"#2e7d32"},
+              pagegrid:{name:"PageGrid", tag:"₹ Cheap",logo:"P",logoBg:"#ede9fe",logoColor:"#5b21b6"},
+              openai:  {name:"OpenAI",   tag:"Paid",logo:"AI", logoBg:"#f3f4f6",logoColor:"#111"},
+              claude:  {name:"Claude",   tag:"Paid",logo:"C",  logoBg:"#fce8db",logoColor:"#b45309"}
+            }).map(([key,v])=>(
+              <div key={key} onClick={()=>setP({...p,aiProvider:key,apiKey:""})}
+                style={{border:`1.5px solid ${p.aiProvider===key?"#2563eb":"#e2e8f0"}`,borderRadius:10,padding:"12px 8px",textAlign:"center",cursor:"pointer",background:p.aiProvider===key?"#eff6ff":"#f8fafc",transition:"all 0.15s",userSelect:"none"}}>
+                <div style={{width:36,height:36,background:v.logoBg,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:13,color:v.logoColor,margin:"0 auto 7px"}}>{v.logo}</div>
+                <div style={{fontSize:12,fontWeight:600,color:"#0f172a",marginBottom:4}}>{v.name}</div>
+                <span style={{background:v.tag==="Free"?"#dcfce7":"#fef3c7",color:v.tag==="Free"?"#15803d":"#92400e",fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:20}}>{v.tag}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{fontSize:10,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:"0.4px",marginBottom:5}}>{prov.label}</div>
+          <input type="password"
+            style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8,fontSize:13,fontFamily:"DM Sans,sans-serif",color:"#0f172a",background:"#f8fafc",outline:"none"}}
+            value={p.apiKey} placeholder={prov.placeholder} onChange={e=>setP({...p,apiKey:e.target.value})}
+            onFocus={e=>{e.target.style.borderColor="#2563eb";e.target.style.background="#fff"}}
+            onBlur={e=>{e.target.style.borderColor="#e2e8f0";e.target.style.background="#f8fafc"}}
+          />
+          <div style={{fontSize:10,color:"#64748b",marginTop:5}}>{prov.hint}</div>
+        </div>
+
+        {/* Save Button */}
+        <div style={{display:"flex",gap:10}}>
+          {onCancel && (
+            <button onClick={onCancel}
+              style={{flex:1,background:"transparent",color:"#64748b",border:"1px solid #e2e8f0",padding:"14px",borderRadius:11,fontSize:14,fontWeight:600,cursor:"pointer",fontFamily:"Space Grotesk,sans-serif"}}>
+              Cancel
+            </button>
+          )}
+          <button
+            onClick={save}
+            disabled={saving}
+            style={{flex:2,background:saving?"#94a3b8":"#1d4ed8",color:"#fff",border:"none",padding:"14px",borderRadius:11,fontSize:14,fontWeight:600,cursor:saving?"not-allowed":"pointer",fontFamily:"Space Grotesk,sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:8,transition:"all 0.15s",boxShadow:saving?"none":"0 4px 16px rgba(37,99,235,0.2)"}}>
+            {saving && <div style={{width:16,height:16,border:"2px solid rgba(255,255,255,0.4)",borderTopColor:"#fff",borderRadius:"50%",animation:"sp 0.7s linear infinite"}}></div>}
+            {saving ? "Saving..." : initialData ? "Save Changes →" : "Save & Go to Dashboard →"}
+          </button>
+        </div>
+        <style>{`@keyframes sp{to{transform:rotate(360deg)}}`}</style>
+      </div>
     </div>
   );
 }
 
-/* DASHBOARD */
+/* ══════════════════════════════════════
+   SCREEN 3 — DASHBOARD
+══════════════════════════════════════ */
 function Dashboard({ profile }) {
+  const [view, setView]           = useState("upload");
+  const [files, setFiles]         = useState([]);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [results, setResults]     = useState([]);
+
+  // Load history from server on mount
+  React.useEffect(() => {
+    const uid = window.__authUser?.uid;
+    if (!uid) return;
+    
+    // Try localStorage cache first
+    const cached = localStorage.getItem("gem_history_" + uid);
+    if (cached) {
+      try { setResults(JSON.parse(cached)); } catch(e) {}
+    }
+    
+    // Then sync from server
+    const SERVER = (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") 
+      ? "http://localhost:3000" : window.location.origin;
+    fetch(`${SERVER}/api/history?uid=${uid}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d?.history) {
+          setResults(d.history);
+          localStorage.setItem("gem_history_" + uid, JSON.stringify(d.history));
+          console.log("✓ History loaded:", d.history.length, "results");
+        }
+      })
+      .catch(e => console.warn("History sync skipped:", e.message));
+  }, []);
+  const [loadMsg, setLoadMsg]     = useState("");
+  const [lStep, setLStep]         = useState(0);
+  const [editing, setEditing]     = useState(false);
+  const [currentProfile, setCurrentProfile] = useState(profile);
+  const fileRef   = useRef();
+  const folderRef = useRef();
+
+  const initials = currentProfile.companyName?.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase() || "CO";
+
+  const onFiles = fs => {
+    const v = Array.from(fs).filter(f=>f.type==="application/pdf"||f.name.endsWith('.pdf'));
+    setFiles(prev=>[...prev,...v]);
+  };
+
+  const toB64 = f => new Promise((res,rej)=>{
+    const r=new FileReader(); r.onload=()=>res(r.result.split(",")[1]); r.onerror=rej; r.readAsDataURL(f);
+  });
+
+  const analyze = async () => {
+    if(!files.length){alert("Please upload documents first!");return;}
+    setAnalyzing(true); setResults([]); setView("results");
+    const newR=[];
+    for(let i=0;i<files.length;i++){
+      const file=files[i];
+      setLoadMsg(`Analyzing document ${i+1} of ${files.length}: "${file.name}"...`); setLStep(0);
+      try{
+        const b64=await toB64(file); setLStep(1);
+        // Build certifications list
+        const certs = [
+          profile.dpiit      && "DPIIT Startup",
+          profile.msme       && "MSME/Udyam",
+          profile.iso9001    && "ISO 9001",
+          profile.iso27001   && "ISO 27001",
+          profile.nasscom    && "NASSCOM Member",
+          profile.gem_seller && "GeM Registered Seller",
+          profile.startupIndia && "Startup India",
+          profile.oem        && "OEM/Manufacturer",
+          profile.gst        && "GST Registered",
+        ].filter(Boolean).join(", ") || "None";
+
+        // Build documents available list
+        const docsAvailable = [
+          profile.doc_oem_cert      && "OEM Certificate",
+          profile.doc_oem_auth      && "OEM Authorization Letter",
+          profile.doc_experience    && "Experience Certificate",
+          profile.doc_turnover      && "Turnover Certificate (CA certified)",
+          profile.doc_balance_sheet && "Audited Balance Sheet",
+          profile.doc_past_orders   && "Past Order Copies",
+          profile.doc_delivery_cert && "Delivery/CRAC Certificate",
+          profile.doc_itr           && "Income Tax Returns",
+          profile.doc_bank_stmt     && "Bank Statement",
+          profile.doc_pq_docs       && "Pre-Qualification Documents",
+          profile.doc_mou           && "MOU/Partnership Deed",
+          profile.doc_workforce     && "Workforce/Staff Proof",
+        ].filter(Boolean).join(", ") || "Basic documents only";
+
+        const ctx=`Company:${profile.companyName}|Type:${profile.type}|Started:${profile.incDate}|Turnover:₹${profile.turnover}L|Certifications:${certs}|Documents Available:${docsAvailable}|Categories:${profile.cats?.join(",")}|State:${profile.state}|Employees:${profile.emp}`;
+        const prompt=`You are a GEM (Government e-Marketplace) procurement expert. Analyze this tender document for the company below.
+
+Company Profile: ${ctx}
+
+Respond in clear English. Return ONLY valid JSON — no markdown, no extra text:
+{
+  "tenderTitle": "exact tender title",
+  "tenderRef": "bid number",
+  "ministry": "ministry/department/organization name",
+  "estimatedValue": "estimated bid value in rupees",
+  "deadline": "last date to submit bid",
+
+  "scopeOfWork": {
+    "summary": "2-3 sentences: what exactly this project is about and what needs to be delivered",
+    "deliverables": ["deliverable 1", "deliverable 2", "deliverable 3", "deliverable 4"],
+    "workType": "supply / service / consultancy / construction / IT / mixed",
+    "deliveryLocation": "where delivery/work needs to happen",
+    "timeline": "delivery period or project duration if mentioned"
+  },
+
+  "documentsAskedByBuyer": [
+    {
+      "name": "exact document name as mentioned in tender",
+      "purpose": "why buyer is asking for this",
+      "mandatory": true or false,
+      "category": "Eligibility / Technical / Financial / Compliance / OEM / Experience / Turnover"
+    }
+  ],
+
+  "eligibilityVerdict": "ELIGIBLE or NOT_ELIGIBLE or PARTIALLY_ELIGIBLE",
+
+  "eligibilityBreakdown": {
+    "turnover": {
+      "required": "exact turnover required from tender",
+      "companyHas": "company turnover from profile",
+      "status": "PASS or FAIL or WAIVED",
+      "reason": "why pass/fail — mention MSE or Startup waiver if applicable",
+      "mseWaiver": true or false,
+      "startupWaiver": true or false
+    },
+    "experience": {
+      "required": "exact experience required",
+      "companyHas": "company experience from profile",
+      "status": "PASS or FAIL or WAIVED",
+      "reason": "why pass/fail — mention waivers",
+      "mseWaiver": true or false,
+      "startupWaiver": true or false
+    },
+    "oem": {
+      "required": "OEM requirement from tender if any",
+      "status": "PASS or FAIL or NA",
+      "reason": "explanation"
+    },
+    "category": {
+      "tenderCategory": "what tender needs",
+      "companyCategory": "what company does",
+      "status": "PASS or FAIL",
+      "reason": "match or mismatch explanation"
+    },
+    "location": {
+      "required": "location requirement if any",
+      "status": "PASS or FAIL or NA",
+      "reason": "explanation"
+    }
+  },
+
+  "ifEligible": {
+    "whatToDo": ["step 1 to apply", "step 2", "step 3", "step 4", "step 5"],
+    "documentsToSubmit": [
+      {
+        "name": "document name",
+        "companyHasIt": true or false,
+        "forWhat": "Turnover proof / Experience proof / OEM proof / Startup exemption / General"
+      }
+    ],
+    "startupAdvantages": "list startup/MSE specific benefits that apply",
+    "importantDeadlines": "deadline and other critical dates"
+  },
+
+  "ifNotEligible": {
+    "mainReasons": ["reason 1 why not eligible", "reason 2", "reason 3"],
+    "missingDocuments": ["document company lacks", "another missing document"],
+    "canApplyAfter": "when company can apply — e.g. after 3 years or after getting ISO cert",
+    "suggestions": "what company should do to become eligible in future"
+  },
+
+  "overallAdvantage": "summary of MSE and Startup relaxations that apply"
+}`
+        setLStep(2);
+        const res=await fetch(API_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pdfBase64:b64,prompt,apiKey:profile.apiKey||"",aiProvider:profile.aiProvider||"gemini"})});
+        if(!res.ok){const t=await res.text();throw new Error(`Server error ${res.status}: ${t.slice(0,200)}`);}
+        const data=await res.json(); setLStep(3);
+        if(data.error) throw new Error(data.error);
+        const clean=(data.text||"").replace(/```json|```/g,"").trim();
+        try{newR.push({file:file.name,...JSON.parse(clean),error:null});}
+        catch{newR.push({file:file.name,error:"Could not parse AI response. Raw: "+clean.slice(0,300)});}
+      }catch(e){newR.push({file:file.name,error:e.message});}
+    }
+    // Combine new results with existing
+    const combined = [...results, ...newR];
+    setResults(combined);
+    setAnalyzing(false);
+
+    // Save to server + localStorage
+    const uid = window.__authUser?.uid;
+    if (uid) {
+      localStorage.setItem("gem_history_" + uid, JSON.stringify(combined));
+      const SERVER = (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") 
+        ? "http://localhost:3000" : window.location.origin;
+      fetch(`${SERVER}/api/history`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ uid, results: combined })
+      }).then(r => { if(r.ok) console.log("✓ History saved to server"); })
+        .catch(e => console.warn("History save skipped:", e.message));
+    }
+  };
+
+  // Clear history function
+  const clearHistory = async () => {
+    if (!confirm("Clear all analysis history? This cannot be undone.")) return;
+    const uid = window.__authUser?.uid;
+    setResults([]);
+    if (uid) {
+      localStorage.removeItem("gem_history_" + uid);
+      const SERVER = (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") 
+        ? "http://localhost:3000" : window.location.origin;
+      try {
+        await fetch(`${SERVER}/api/history?uid=${uid}`, { method: "DELETE" });
+        console.log("✓ History cleared");
+      } catch(e) { console.warn("Clear failed:", e.message); }
+    }
+  };
+
+  const logout = () => window.__signOut();
+
+  const vcls=v=>v==="ELIGIBLE"?"vcard ve":v==="NOT_ELIGIBLE"?"vcard vi":"vcard vw";
+  const vico=v=>v==="ELIGIBLE"?"✅":v==="NOT_ELIGIBLE"?"❌":"⚠️";
+  const vlbl=v=>v==="ELIGIBLE"?"Eligible — You can apply!":v==="NOT_ELIGIBLE"?"Not Eligible":"Partially Eligible — Review conditions";
+  const ccls=s=>s==="PASS"?"citem cp":s==="FAIL"?"citem cf":"citem cwa";
+
+  // Handle profile update
+  const handleProfileUpdate = async (updatedProfile) => {
+    try {
+      const { user, saveProfile } = window.__gem;
+      await saveProfile(user.uid, updatedProfile);
+      window.__currentProfile = updatedProfile;
+      setCurrentProfile(updatedProfile);
+      setEditing(false);
+    } catch(e) {
+      alert("Failed to save: " + e.message);
+    }
+  };
+
+  // Show edit screen
+  if (editing) return (
+    <SetupScreen
+      initialData={currentProfile}
+      onSaved={(p) => handleProfileUpdate(p)}
+      onCancel={() => setEditing(false)}
+    />
+  );
+
   return (
-    <div style={{padding:40}}>
-      <h2>Dashboard</h2>
+    <div className="app">
+      {/* HEADER */}
+      <div className="header">
+        <div className="hlogo">
+          <div className="hicon">GEM</div>
+          <div><div className="htitle">GEM Tender Eligibility Checker</div><div className="hsub">{currentProfile.companyName}</div></div>
+        </div>
+        <div className="hright">
+          <span className="hbadge">Startup Edition</span>
+          <button className="hedit-btn" onClick={logout}>Logout</button>
+        </div>
+      </div>
 
-      <p><b>Company:</b> {profile.companyName}</p>
-      <p><b>Email:</b> {profile.email}</p>
+      <div className="dashboard">
+        {/* SIDEBAR */}
+        <div className="sidebar">
+          <div className="slabel">Company</div>
+          <div className="company-card">
+            <div className="company-avatar">{initials}</div>
+            <div className="company-name">{currentProfile.companyName}</div>
+            <div className="company-type">{currentProfile.type}</div>
+            <div className="company-pills">
+              {currentProfile.dpiit&&<span className="cpill cpill-green">✓ DPIIT</span>}
+              {currentProfile.msme&&<span className="cpill cpill-blue">✓ MSME</span>}
+              <span className="cpill cpill-gray">Est. {currentProfile.incDate?.slice(0,7)}</span>
+            </div>
+          </div>
+          <div className="slabel">Details</div>
+          <div className="info-row"><span className="info-key">Turnover</span><span className="info-val">₹{currentProfile.turnover}L</span></div>
+          <div className="info-row"><span className="info-key">Team</span><span className="info-val">{currentProfile.emp}</span></div>
+          <div className="info-row"><span className="info-key">State</span><span className="info-val">{currentProfile.state}</span></div>
+          <div className="info-row"><span className="info-key">AI Provider</span><span className="info-val" style={{textTransform:"capitalize"}}>{currentProfile.aiProvider||"gemini"}</span></div>
+          {currentProfile.panNumber&&<div className="info-row"><span className="info-key">PAN</span><span className="info-val">{currentProfile.panNumber}</span></div>}
+          <div className="slabel">Categories</div>
+          {(currentProfile.cats||[]).slice(0,6).map(c=>(
+            <div key={c} className="info-row" style={{paddingLeft:6}}>
+              <span style={{fontSize:10,color:"#60a5fa"}}>▸</span>
+              <span className="info-val" style={{color:"#475569",textAlign:"left",marginLeft:6}}>{c}</span>
+            </div>
+          ))}
+          {(currentProfile.cats||[]).length>6&&<div style={{fontSize:10,color:"#94a3b8",padding:"4px 6px"}}>+{currentProfile.cats.length-6} more</div>}
+          <div className="slabel">Menu</div>
+          <div className={`snav-item${view==="upload"?" active":""}`} onClick={()=>setView("upload")}>
+            <div className="snav-icon">📤</div>Upload Documents
+          </div>
+          <div className={`snav-item${view==="results"?" active":""}`} onClick={()=>setView("results")}>
+            <div className="snav-icon">📊</div>Analysis Results
+            {results.length>0&&<span className="snav-count">{results.length}</span>}
+          </div>
+          <div style={{marginTop:"auto",paddingTop:20,display:"flex",flexDirection:"column",gap:8}}>
+            <button onClick={()=>setEditing(true)} style={{width:"100%",background:"transparent",color:"#1d4ed8",border:"1px solid #bfdbfe",padding:"9px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"DM Sans,sans-serif",transition:"all 0.15s",fontWeight:500}}
+              onMouseOver={e=>e.target.style.background="#eff6ff"} onMouseOut={e=>e.target.style.background="transparent"}>
+              ✏ Edit Company Details
+            </button>
+            <button onClick={logout} style={{width:"100%",background:"transparent",color:"#64748b",border:"1px solid #e2e8f0",padding:"9px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"DM Sans,sans-serif",transition:"all 0.15s"}}
+              onMouseOver={e=>e.target.style.background="#f8fafc"} onMouseOut={e=>e.target.style.background="transparent"}>
+              Logout
+            </button>
+          </div>
+        </div>
 
-      <button onClick={()=>window.__signOut()}>Logout</button>
+        {/* MAIN PANEL */}
+        <div className="main-panel">
+
+          {view==="upload"&&(
+            <>
+              <div className="panel-header">
+                <div className="panel-title">GEM Tender Documents</div>
+                <div className="panel-sub">Upload unlimited documents — AI will deeply analyze your eligibility</div>
+              </div>
+              <div className="stats-row">
+                <div className="stat-card"><div className="stat-label">Uploaded files</div><div className="stat-val">{files.length}</div><div className="stat-sub">Unlimited documents</div></div>
+                <div className={`stat-card${results.length>0?" stat-green":""}`}><div className="stat-label">Analyzed</div><div className="stat-val">{results.length}</div><div className="stat-sub">Results ready</div></div>
+                <div className={`stat-card${results.filter(r=>!r.error&&r.eligibilityVerdict==="ELIGIBLE").length>0?" stat-blue":""}`}><div className="stat-label">Eligible tenders</div><div className="stat-val">{results.filter(r=>!r.error&&r.eligibilityVerdict==="ELIGIBLE").length}</div><div className="stat-sub">You can apply</div></div>
+              </div>
+              <div className="drop-zone"
+                onClick={e=>{if(e.target===e.currentTarget||e.target.classList.contains('drop-zone')||e.target.classList.contains('dz-icon')||e.target.classList.contains('dz-title')||e.target.classList.contains('dz-sub')||e.target.tagName==='svg'||e.target.tagName==='polyline'||e.target.tagName==='line'||e.target.tagName==='path')fileRef.current.click();}}
+                onDragOver={e=>{e.preventDefault();e.currentTarget.classList.add("drag-over");}}
+                onDragLeave={e=>e.currentTarget.classList.remove("drag-over")}
+                onDrop={e=>{e.preventDefault();e.currentTarget.classList.remove("drag-over");onFiles(e.dataTransfer.files);}}>
+                <div className="dz-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
+                <div className="dz-title">Drop Documents Here</div>
+                <div className="dz-sub">Drop your GEM tender PDFs downloaded from the GEM portal<br/>Drag & drop or click to browse your files</div>
+                <div style={{display:"flex",gap:10,justifyContent:"center",marginTop:14}}>
+                  <div className="dz-btn" style={{margin:0}} onClick={e=>{e.stopPropagation();fileRef.current.click();}}>📄 Select Files</div>
+                  <div className="dz-btn" style={{margin:0,background:"#4f46e5"}} onClick={e=>{e.stopPropagation();folderRef.current.click();}}>📁 Select Folder</div>
+                </div>
+                <div className="dz-formats" style={{marginTop:10}}>PDF files only  •  Unlimited documents  •  Select files or entire folder</div>
+              </div>
+              <input ref={fileRef} type="file" accept=".pdf" multiple style={{display:"none"}} onChange={e=>onFiles(e.target.files)}/>
+              <input ref={folderRef} type="file" accept=".pdf" multiple webkitdirectory="" style={{display:"none"}} onChange={e=>onFiles(e.target.files)}/>
+              {files.length>0&&(
+                <div className="file-queue">
+                  {files.map((f,i)=>(
+                    <div key={i} className="fitem">
+                      <div className="ficon">PDF</div>
+                      <div style={{flex:1}}><div className="fname">{f.name}</div><div className="fsize">{(f.size/1024).toFixed(0)} KB</div></div>
+                      <div style={{fontSize:11,color:"#94a3b8",marginRight:10}}>#{i+1}</div>
+                      <button className="frem" onClick={()=>setFiles(files.filter((_,j)=>j!==i))}>×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="analyze-bar">
+                <div className="analyze-bar-text">
+                  <h3>AI Eligibility Analysis</h3>
+                  <p>{!files.length?"Upload documents to begin analysis":`${files.length} file(s) ready — ${profile.companyName} criteria will be matched`}</p>
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"flex-end"}}>
+                  <button className="btn-analyze" disabled={!files.length||analyzing} onClick={analyze}>
+                    {analyzing?"Analyzing...":`Analyze ${files.length} Document${files.length!==1?"s":""} →`}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
+          {view==="results"&&(
+            <>
+              <div className="panel-header" style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div>
+                  <div className="panel-title">Analysis Results</div>
+                  <div className="panel-sub">
+                    {results.length} document{results.length!==1?"s":""} analyzed &nbsp;•&nbsp; {profile.companyName}
+                    {results.length>0&&<>&nbsp;•&nbsp;<span style={{color:"#16a34a",fontWeight:500}}>{results.filter(r=>!r.error&&r.eligibilityVerdict==="ELIGIBLE").length} eligible</span>&nbsp;/&nbsp;<span style={{color:"#dc2626",fontWeight:500}}>{results.filter(r=>!r.error&&r.eligibilityVerdict==="NOT_ELIGIBLE").length} not eligible</span></>}
+                  </div>
+                </div>
+                {results.length > 0 && (
+                  <button onClick={clearHistory} style={{background:"transparent",color:"#dc2626",border:"1px solid #fca5a5",padding:"7px 14px",borderRadius:8,fontSize:11,cursor:"pointer",fontWeight:500,transition:"all 0.15s"}}
+                    onMouseOver={e=>e.target.style.background="#fff1f2"} onMouseOut={e=>e.target.style.background="transparent"}>
+                    🗑 Clear History
+                  </button>
+                )}
+              </div>
+              {analyzing&&(
+                <div className="lcard">
+                  <div className="spin"></div>
+                  <div style={{fontSize:15,fontWeight:600,color:"#0f172a",marginBottom:5}}>Reading documents...</div>
+                  <div style={{fontSize:12,color:"#64748b",marginBottom:16}}>{loadMsg}</div>
+                  <div className="lsteps">
+                    {["Extracting PDF text","Matching company criteria","Analyzing work details","Preparing results"].map((s,i)=>(
+                      <div key={i} className={`lstep${lStep===i?" act":""}`}>{s}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {!analyzing&&results.length===0&&(
+                <div className="empty"><div className="empty-icon">📊</div><h3>No results yet</h3><p>Go to the Upload tab to analyze documents</p>
+                  <button style={{marginTop:16,background:"#1d4ed8",color:"#fff",border:"none",padding:"10px 22px",borderRadius:9,fontSize:12,cursor:"pointer",fontWeight:600}} onClick={()=>setView("upload")}>← Go to Upload</button>
+                </div>
+              )}
+
+              {/* ── CHANCES CHART — shows when 2+ results ── */}
+              {!analyzing && results.filter(r=>!r.error).length >= 1 && (
+                <div className="card" style={{marginBottom:20}}>
+                  <div style={{fontFamily:"Space Grotesk,sans-serif",fontSize:14,fontWeight:700,color:"#0f172a",marginBottom:16,display:"flex",alignItems:"center",gap:8}}>
+                    📊 Project Chances Overview
+                    <span style={{flex:1,height:1,background:"#e2e8f0",display:"inline-block"}}></span>
+                    <span style={{fontSize:11,color:"#64748b",fontWeight:400}}>{results.filter(r=>!r.error).length} projects analyzed</span>
+                  </div>
+
+                  {/* Summary pills */}
+                  <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
+                    {[
+                      {label:"High Chances",  count:results.filter(r=>!r.error&&r.eligibilityVerdict==="ELIGIBLE").length,       color:"#16a34a",bg:"#f0fdf4",border:"#86efac"},
+                      {label:"Partial",       count:results.filter(r=>!r.error&&r.eligibilityVerdict==="PARTIALLY_ELIGIBLE").length, color:"#d97706",bg:"#fffbeb",border:"#fcd34d"},
+                      {label:"Not Eligible",  count:results.filter(r=>!r.error&&r.eligibilityVerdict==="NOT_ELIGIBLE").length,   color:"#dc2626",bg:"#fff1f2",border:"#fca5a5"},
+                    ].map(({label,count,color,bg,border})=>(
+                      <div key={label} style={{background:bg,border:`1.5px solid ${border}`,borderRadius:10,padding:"10px 18px",textAlign:"center",minWidth:100}}>
+                        <div style={{fontFamily:"Space Grotesk,sans-serif",fontSize:24,fontWeight:700,color}}>{count}</div>
+                        <div style={{fontSize:11,color,fontWeight:500}}>{label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Bar chart */}
+                  <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                    {results.filter(r=>!r.error).map((r,i)=>{
+                      const verdict = r.eligibilityVerdict;
+                      const isEligible  = verdict==="ELIGIBLE";
+                      const isPartial   = verdict==="PARTIALLY_ELIGIBLE";
+                      const barColor    = isEligible?"#16a34a":isPartial?"#d97706":"#dc2626";
+                      const barBg       = isEligible?"#f0fdf4":isPartial?"#fffbeb":"#fff1f2";
+                      const barWidth    = isEligible?"90%":isPartial?"55%":"15%";
+                      const chanceLabel = isEligible?"High Chances ✓":isPartial?"Partial — Review":"Not Eligible ✗";
+                      const icon        = isEligible?"✅":isPartial?"⚠️":"❌";
+                      const name        = r.tenderTitle || r.file.replace('.pdf','').replace('GeM-Bidding-','Bid #').replace('GEM-Bidding-','Bid #');
+                      const value       = r.estimatedValue || "";
+                      return (
+                        <div key={i} style={{background:barBg,border:`1px solid ${barColor}33`,borderRadius:10,padding:"12px 16px"}}>
+                          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                            <div style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:0}}>
+                              <span style={{fontSize:16,flexShrink:0}}>{icon}</span>
+                              <div style={{minWidth:0}}>
+                                <div style={{fontSize:12,fontWeight:600,color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{name}</div>
+                                <div style={{display:"flex",gap:8,marginTop:2,flexWrap:"wrap"}}>
+                                  {value && <span style={{fontSize:10,color:"#64748b"}}>💰 {value}</span>}
+                                  {r.deadline && <span style={{fontSize:10,color:"#64748b"}}>📅 {r.deadline}</span>}
+                                  {r.scopeOfWork?.workType && <span style={{fontSize:10,color:"#64748b"}}>🏷 {r.scopeOfWork.workType}</span>}
+                                </div>
+                              </div>
+                            </div>
+                            <div style={{flexShrink:0,textAlign:"right",marginLeft:12}}>
+                              <div style={{fontSize:11,fontWeight:700,color:barColor}}>{chanceLabel}</div>
+                            </div>
+                          </div>
+                          {/* Progress bar */}
+                          <div style={{background:"#e2e8f0",borderRadius:20,height:8,overflow:"hidden"}}>
+                            <div style={{width:barWidth,height:"100%",background:barColor,borderRadius:20,transition:"width 0.8s ease"}}></div>
+                          </div>
+                          {/* Quick summary */}
+                          {r.eligibilityBreakdown && (
+                            <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
+                              {Object.entries(r.eligibilityBreakdown).map(([key,val])=>{
+                                if(!val||val.status==="NA") return null;
+                                const s = val.status;
+                                const sc = s==="PASS"||s==="WAIVED"?"#16a34a":s==="FAIL"?"#dc2626":"#d97706";
+                                const sb = s==="PASS"||s==="WAIVED"?"#dcfce7":s==="FAIL"?"#fee2e2":"#fef3c7";
+                                const labels = {turnover:"Turnover",experience:"Experience",oem:"OEM",category:"Category",location:"Location"};
+                                return (
+                                  <span key={key} style={{background:sb,color:sc,fontSize:9,padding:"2px 7px",borderRadius:20,fontWeight:700}}>
+                                    {s==="PASS"||s==="WAIVED"?"✓":"✗"} {labels[key]||key}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Best recommendation */}
+                  {results.filter(r=>!r.error&&r.eligibilityVerdict==="ELIGIBLE").length > 0 && (
+                    <div style={{background:"#eff6ff",border:"1.5px solid #bfdbfe",borderRadius:10,padding:"12px 16px",marginTop:16,display:"flex",alignItems:"center",gap:10}}>
+                      <span style={{fontSize:20}}>🎯</span>
+                      <div>
+                        <div style={{fontSize:12,fontWeight:700,color:"#1d4ed8",marginBottom:2}}>Best Project to Apply</div>
+                        <div style={{fontSize:12,color:"#1e40af"}}>
+                          {(()=>{
+                            const best = results.filter(r=>!r.error&&r.eligibilityVerdict==="ELIGIBLE")[0];
+                            return (best?.tenderTitle || best?.file || "").replace('.pdf','');
+                          })()}
+                          {results.filter(r=>!r.error&&r.eligibilityVerdict==="ELIGIBLE").length > 1 && ` and ${results.filter(r=>!r.error&&r.eligibilityVerdict==="ELIGIBLE").length-1} more`}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {!analyzing&&results.map((r,idx)=>r.error?(
+                <div key={idx} className="card" style={{borderLeft:"3px solid #fca5a5"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><span style={{fontSize:16}}>❌</span><div style={{color:"#dc2626",fontWeight:600,fontSize:13}}>{r.file}</div></div>
+                  <div style={{fontSize:12,color:"#64748b",background:"#fff1f2",padding:"10px 12px",borderRadius:8,lineHeight:1.6}}>{r.error}</div>
+                </div>
+              ):(
+                <div key={idx} style={{marginBottom:36}}>
+                  <div className="rhead">
+                    <div className="rco">{profile.companyName} — Document {idx+1} of {results.length}</div>
+                    <div className="rdoc">{r.tenderTitle||r.file}</div>
+                    <div className="rref">{r.tenderRef&&`Ref: ${r.tenderRef} • `}{r.ministry}</div>
+                    <div className="rpills">
+                      {r.estimatedValue&&<span className="rp rpb">💰 {r.estimatedValue}</span>}
+                      {r.workType&&<span className="rp rpb">🏷 {r.workType}</span>}
+                      {r.deadline&&<span className="rp rpa">📅 {r.deadline}</span>}
+                      <span className={`rp ${r.eligibilityVerdict==="ELIGIBLE"?"rpg":r.eligibilityVerdict==="NOT_ELIGIBLE"?"rpr":"rpa"}`}>{vico(r.eligibilityVerdict)} {r.eligibilityVerdict}</span>
+                    </div>
+                  </div>
+                  <div className={vcls(r.eligibilityVerdict)}>
+                    <div className="vicon">{vico(r.eligibilityVerdict)}</div>
+                    <div><div className="vtitle">{vlbl(r.eligibilityVerdict)}</div><div className="vdesc">{r.verdictReason}</div></div>
+                  </div>
+                  {/* ── SCOPE OF WORK ── */}
+                  {r.scopeOfWork && (
+                    <div className="card" style={{marginBottom:14}}>
+                      <div className="sh">📋 Scope of Work</div>
+                      <div style={{background:"#f8fafc",borderRadius:9,padding:"12px 14px",marginBottom:12,fontSize:12,color:"#334155",lineHeight:1.7,borderLeft:"3px solid #2563eb"}}>
+                        {r.scopeOfWork.summary}
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
+                        {[
+                          ["Work Type",      r.scopeOfWork.workType],
+                          ["Location",       r.scopeOfWork.deliveryLocation],
+                          ["Timeline",       r.scopeOfWork.timeline],
+                        ].map(([k,v])=> v && (
+                          <div key={k} style={{background:"#f1f5f9",borderRadius:8,padding:"10px 12px"}}>
+                            <div style={{fontSize:9,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:3}}>{k}</div>
+                            <div style={{fontSize:12,color:"#0f172a",fontWeight:500}}>{v}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="sh">Deliverables</div>
+                      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                        {(r.scopeOfWork.deliverables||[]).map((d,i)=>(
+                          <div key={i} style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderLeft:"3px solid #2563eb",borderRadius:"0 8px 8px 0",padding:"9px 12px",fontSize:12,color:"#0f172a",lineHeight:1.5}}>• {d}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── ELIGIBILITY BREAKDOWN ── */}
+                  <div className={vcls(r.eligibilityVerdict)}>
+                    <div className="vicon">{vico(r.eligibilityVerdict)}</div>
+                    <div style={{flex:1}}>
+                      <div className="vtitle">{vlbl(r.eligibilityVerdict)}</div>
+                      {r.eligibilityBreakdown && (
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:12}}>
+                          {Object.entries(r.eligibilityBreakdown).map(([key, val])=>{
+                            if(!val || val.status==="NA") return null;
+                            const statusColor = val.status==="PASS"||val.status==="WAIVED" ? "#16a34a" : "#dc2626";
+                            const statusBg    = val.status==="PASS"||val.status==="WAIVED" ? "#f0fdf4" : "#fff1f2";
+                            const icon = val.status==="PASS"?"✓":val.status==="WAIVED"?"◎":"✗";
+                            const labels = {turnover:"Turnover",experience:"Experience",oem:"OEM Requirement",category:"Work Category",location:"Location"};
+                            return (
+                              <div key={key} style={{background:statusBg,border:`1px solid ${statusColor}33`,borderRadius:9,padding:"10px 12px"}}>
+                                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                                  <span style={{color:statusColor,fontWeight:700,fontSize:13}}>{icon}</span>
+                                  <span style={{fontSize:11,fontWeight:700,color:statusColor,textTransform:"uppercase",letterSpacing:"0.4px"}}>{labels[key]||key}</span>
+                                  {(val.mseWaiver||val.startupWaiver) && <span style={{background:"#dbeafe",color:"#1d4ed8",fontSize:9,padding:"1px 6px",borderRadius:20,fontWeight:600}}>WAIVED</span>}
+                                </div>
+                                {val.required && <div style={{fontSize:11,color:"#475569"}}>Required: <strong>{val.required}</strong></div>}
+                                {val.companyHas && <div style={{fontSize:11,color:"#475569"}}>Yours: <strong>{val.companyHas}</strong></div>}
+                                <div style={{fontSize:10,color:"#64748b",marginTop:3,fontStyle:"italic",lineHeight:1.4}}>{val.reason}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* ── DOCUMENTS BUYER IS ASKING ── */}
+                  {r.documentsAskedByBuyer?.length > 0 && (
+                    <div className="card" style={{marginBottom:14}}>
+                      <div className="sh">📄 Documents Buyer is Asking For</div>
+                      <div style={{overflowX:"auto"}}>
+                        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                          <thead>
+                            <tr style={{background:"#f8fafc"}}>
+                              {["#","Document","Purpose","Category","Mandatory"].map(h=>(
+                                <th key={h} style={{padding:"8px 12px",textAlign:h==="#"||h==="Mandatory"?"center":"left",fontSize:10,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:"0.4px",borderBottom:"1px solid #e2e8f0"}}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {r.documentsAskedByBuyer.map((d,i)=>{
+                              const catColor = {Eligibility:"#7c3aed",Technical:"#0891b2",Financial:"#d97706",OEM:"#b45309",Experience:"#0284c7",Turnover:"#16a34a",Compliance:"#dc2626"}[d.category]||"#475569";
+                              return (
+                                <tr key={i} style={{borderBottom:"1px solid #f1f5f9",background:i%2===0?"#fff":"#fafafa"}}>
+                                  <td style={{padding:"9px 12px",color:"#94a3b8",fontWeight:600,textAlign:"center"}}>{i+1}</td>
+                                  <td style={{padding:"9px 12px",fontWeight:600,color:"#0f172a"}}>{d.name}</td>
+                                  <td style={{padding:"9px 12px",color:"#475569",fontSize:11,lineHeight:1.4}}>{d.purpose}</td>
+                                  <td style={{padding:"9px 12px"}}>
+                                    <span style={{background:`${catColor}18`,color:catColor,fontSize:10,padding:"2px 8px",borderRadius:20,fontWeight:600,whiteSpace:"nowrap"}}>{d.category}</span>
+                                  </td>
+                                  <td style={{padding:"9px 12px",textAlign:"center"}}>
+                                    <span style={{background:d.mandatory?"#fee2e2":"#f0fdf4",color:d.mandatory?"#dc2626":"#16a34a",fontSize:10,padding:"2px 8px",borderRadius:20,fontWeight:600}}>{d.mandatory?"Must":"Optional"}</span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── IF ELIGIBLE: HOW TO APPLY + DOCS TO SUBMIT ── */}
+                  {r.eligibilityVerdict !== "NOT_ELIGIBLE" && r.ifEligible && (
+                    <div className="card" style={{marginBottom:14,border:"1.5px solid #86efac",background:"#f0fdf4"}}>
+                      <div className="sh" style={{color:"#15803d"}}>✅ How to Apply</div>
+                      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
+                        {(r.ifEligible.whatToDo||[]).map((s,i)=>(
+                          <div key={i} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"10px 13px",background:"#fff",border:"1px solid #bbf7d0",borderRadius:9}}>
+                            <div style={{width:24,height:24,borderRadius:"50%",background:"#16a34a",color:"#fff",fontSize:11,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontFamily:"Space Grotesk,sans-serif"}}>{i+1}</div>
+                            <div style={{fontSize:12,color:"#166534",lineHeight:1.5,paddingTop:2}}>{s}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="sh" style={{color:"#15803d"}}>Documents to Submit</div>
+                      <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12}}>
+                        {(r.ifEligible.documentsToSubmit||[]).map((d,i)=>(
+                          <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",background:d.companyHasIt?"#f0fdf4":"#fff7ed",border:`1px solid ${d.companyHasIt?"#86efac":"#fed7aa"}`,borderRadius:9}}>
+                            <span style={{fontSize:16}}>{d.companyHasIt?"✅":"⚠️"}</span>
+                            <div style={{flex:1}}>
+                              <div style={{fontSize:12,fontWeight:600,color:"#0f172a"}}>{d.name}</div>
+                              <div style={{fontSize:10,color:"#64748b"}}>{d.forWhat}</div>
+                            </div>
+                            <span style={{fontSize:10,fontWeight:600,color:d.companyHasIt?"#16a34a":"#d97706",background:d.companyHasIt?"#dcfce7":"#fef3c7",padding:"2px 8px",borderRadius:20}}>{d.companyHasIt?"You have it":"Get this"}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {r.ifEligible.startupAdvantages && (
+                        <div style={{background:"#dbeafe",borderRadius:9,padding:"10px 14px",fontSize:12,color:"#1e40af",lineHeight:1.6}}>
+                          <strong>🚀 Your Advantages:</strong> {r.ifEligible.startupAdvantages}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── IF NOT ELIGIBLE: REASONS ── */}
+                  {r.eligibilityVerdict === "NOT_ELIGIBLE" && r.ifNotEligible && (
+                    <div className="card" style={{marginBottom:14,border:"1.5px solid #fca5a5",background:"#fff1f2"}}>
+                      <div className="sh" style={{color:"#be123c"}}>❌ Why Not Eligible</div>
+                      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
+                        {(r.ifNotEligible.mainReasons||[]).map((reason,i)=>(
+                          <div key={i} style={{display:"flex",gap:10,padding:"10px 13px",background:"#fff",border:"1px solid #fca5a5",borderRadius:9}}>
+                            <span style={{color:"#dc2626",fontWeight:700,fontSize:14,flexShrink:0}}>✗</span>
+                            <div style={{fontSize:12,color:"#9f1239",lineHeight:1.5}}>{reason}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {r.ifNotEligible.missingDocuments?.length > 0 && (
+                        <>
+                          <div className="sh" style={{color:"#be123c"}}>Missing Documents</div>
+                          <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:12}}>
+                            {r.ifNotEligible.missingDocuments.map((d,i)=>(
+                              <span key={i} style={{background:"#fee2e2",color:"#dc2626",border:"1px solid #fca5a5",padding:"4px 10px",borderRadius:20,fontSize:11,fontWeight:500}}>📄 {d}</span>
+                            ))}
+                          </div>
+                        </>
+                      )}
+
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                        {r.ifNotEligible.canApplyAfter && (
+                          <div style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:9,padding:"12px 14px"}}>
+                            <div style={{fontSize:10,fontWeight:700,color:"#d97706",textTransform:"uppercase",letterSpacing:"0.4px",marginBottom:4}}>Can Apply After</div>
+                            <div style={{fontSize:12,color:"#92400e"}}>{r.ifNotEligible.canApplyAfter}</div>
+                          </div>
+                        )}
+                        {r.ifNotEligible.suggestions && (
+                          <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:9,padding:"12px 14px"}}>
+                            <div style={{fontSize:10,fontWeight:700,color:"#1d4ed8",textTransform:"uppercase",letterSpacing:"0.4px",marginBottom:4}}>What To Do</div>
+                            <div style={{fontSize:12,color:"#1e40af"}}>{r.ifNotEligible.suggestions}</div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {r.overallAdvantage && <div className="abox ai" style={{marginBottom:0}}><strong>💡 Overall Advantage:</strong> {r.overallAdvantage}</div>}                </div>
+              ))}
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
-/* APP ROOT */
-function App(){
-  const [screen, setScreen] = useState("loading");
+/* ══════════════════════════════════════
+   ROOT APP — manages screens
+══════════════════════════════════════ */
+function App() {
+  const [screen, setScreen]   = useState("loading"); // loading | setup | dashboard
   const [profile, setProfile] = useState(null);
 
   useEffect(() => {
-    const check = setInterval(() => {
+    console.log("App mounted, polling for auth status...");
+    const poll = setInterval(() => {
+      if (!window.__gem) return;
+      const status = window.__appStatus;
+      const profile = window.__currentProfile;
+      console.log("Poll status:", status);
 
-      if (window.__appStatus === "dashboard") {
-        setProfile(window.__currentProfile);
-        setScreen("dashboard");
-        clearInterval(check);
+      if (status === "loading") return;
+
+      // Got a final status — clear interval and update React
+      clearInterval(poll);
+      console.log("→ Switching to screen:", status);
+
+      if (status === "dashboard") { setProfile(profile); setScreen("dashboard"); }
+      else if (status === "setup") { setScreen("setup"); }
+      else { setScreen("setup"); } // fallback to setup never error
+    }, 200);
+
+    // Safety timeout — fall back to setup (NOT error)
+    const timeout = setTimeout(() => {
+      clearInterval(poll);
+      console.warn("Auth timeout — falling back to setup");
+      if (window.__gem && window.__appStatus === "loading") {
+        window.__appStatus = "setup";
       }
+      setScreen("setup");
+    }, 25000);
 
-      if (window.__appStatus === "setup") {
-        setScreen("setup");
-        clearInterval(check);
-      }
-
-    }, 300);
-
-    return () => clearInterval(check);
+    return () => { clearInterval(poll); clearTimeout(timeout); };
   }, []);
 
   if (screen === "loading") return <LoadingScreen/>;
-  if (screen === "setup") return <SetupScreen onSaved={(p)=>{setProfile(p);setScreen("dashboard");}}/>;
+
+  if (screen === "setup") return <SetupScreen onSaved={p=>{setProfile(p);setScreen("dashboard");}}/>;
 
   return <Dashboard profile={profile}/>;
 }
 
-ReactDOM.render(<App/>, document.getElementById("root"));
+ReactDOM.render(<App/>, document.getElementById('root'));
 </script>
-
 </body>
 </html>
