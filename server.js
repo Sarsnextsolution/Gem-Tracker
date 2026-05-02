@@ -1,21 +1,19 @@
 // ─────────────────────────────────────────────
-//  GEM Checker — Production Server
-//  Supports: Gemini, PageGrid, OpenAI, Claude
-//  Storage: MongoDB Atlas
+//  GEM Checker — Each provider uses native PDF
 //
-//  Local:  node server.js
-//  Render: node server.js
+//  Gemini   → PDF directly (inline_data)
+//  Claude   → PDF directly (document type)
+//  OpenAI   → PDF directly (file content)
+//  PageGrid → PDF text (their API limitation)
 // ─────────────────────────────────────────────
 
 const http  = require("http");
 const https = require("https");
 const fs    = require("fs");
 const path  = require("path");
-const url   = require("url");
 
-const PORT         = process.env.PORT || 3000;
-const MONGO_URI    = process.env.MONGO_URI || "";
-const GEMINI_MODEL = "gemini-2.0-flash";
+const PORT      = process.env.PORT || 3000;
+const MONGO_URI = process.env.MONGO_URI || "";
 
 const MIME = {
   ".html": "text/html",
@@ -63,20 +61,14 @@ function httpsPost(hostname, path, headers, body) {
 }
 
 // ══════════════════════════════════════════════
-//  MONGODB PROFILE STORAGE
+//  MONGODB STORAGE
 // ══════════════════════════════════════════════
-
-// Simple MongoDB driver using HTTPS REST API (no npm needed!)
-// Uses MongoDB Data API
 let mongoClient = null;
 let profilesCollection = null;
-
-// Fallback: local JSON file if no MongoDB
 const LOCAL_DB = path.join(__dirname, "profiles.json");
 
 async function getProfile(uid) {
   if (MONGO_URI) {
-    // Use MongoDB native driver via dynamic require
     try {
       if (!mongoClient) {
         const { MongoClient } = require("mongodb");
@@ -109,11 +101,9 @@ async function saveProfile(uid, profile) {
         { $set: { uid, profile, updatedAt: new Date() } },
         { upsert: true }
       );
-      console.log(`  ✓ Profile saved to MongoDB for uid: ${uid.slice(0,8)}...`);
+      console.log(`  ✓ Profile saved to MongoDB (${uid.slice(0,8)}...)`);
       return;
-    } catch(e) {
-      console.error("MongoDB save error:", e.message);
-    }
+    } catch(e) { console.error("MongoDB save error:", e.message); }
   }
   saveProfileLocal(uid, profile);
 }
@@ -122,7 +112,7 @@ function getProfileLocal(uid) {
   try {
     const db = fs.existsSync(LOCAL_DB) ? JSON.parse(fs.readFileSync(LOCAL_DB, "utf8")) : {};
     return db[uid]?.profile || null;
-  } catch(e) { return null; }
+  } catch { return null; }
 }
 
 function saveProfileLocal(uid, profile) {
@@ -130,64 +120,94 @@ function saveProfileLocal(uid, profile) {
     const db = fs.existsSync(LOCAL_DB) ? JSON.parse(fs.readFileSync(LOCAL_DB, "utf8")) : {};
     db[uid] = { profile, updatedAt: new Date().toISOString() };
     fs.writeFileSync(LOCAL_DB, JSON.stringify(db, null, 2));
-    console.log(`  ✓ Profile saved to local file for uid: ${uid.slice(0,8)}...`);
+    console.log(`  ✓ Profile saved locally (${uid.slice(0,8)}...)`);
   } catch(e) { console.error("Local save error:", e.message); }
 }
 
 // ══════════════════════════════════════════════
-//  AI PROVIDERS
+//  AI PROVIDERS — each uses native PDF support
 // ══════════════════════════════════════════════
 
+// ── 1. GEMINI — PDF native support ──
 async function callGemini(apiKey, pdfBase64, prompt) {
   const result = await httpsPost(
     "generativelanguage.googleapis.com",
-    `/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
+    `/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
     {},
     {
-      contents: [{ parts: [{ inline_data: { mime_type: "application/pdf", data: pdfBase64 } }, { text: prompt }] }],
-      generationConfig: { temperature: 0.2, maxOutputTokens: 2048 }
+      contents: [{
+        parts: [
+          { inline_data: { mime_type: "application/pdf", data: pdfBase64 } },
+          { text: prompt }
+        ]
+      }],
+      generationConfig: { temperature: 0.2, maxOutputTokens: 4096 }
     }
   );
   if (result.status !== 200) {
     const msg = result.body?.error?.message || "Gemini error";
-    if (result.status === 429) throw new Error("Gemini quota exceeded. Please wait a few minutes.");
+    if (result.status === 429) throw new Error("Gemini quota exceeded. Wait few minutes.");
     if (result.status === 403) throw new Error("Invalid Gemini API key.");
     throw new Error(msg);
   }
   return result.body?.candidates?.[0]?.content?.parts?.[0]?.text || "";
 }
 
-async function callPageGrid(apiKey, pdfBase64, prompt) {
+// ── 2. CLAUDE — PDF native support ──
+async function callClaude(apiKey, pdfBase64, prompt) {
   const result = await httpsPost(
-    "api.pagegrid.in",
+    "api.anthropic.com",
     "/v1/messages",
-    { "api-key": apiKey },
     {
-      model: "claude-opus-4-6",
-      max_tokens: 2048,
-      messages: [{ role: "user", content: prompt }]
+      "x-api-key":         apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    {
+      model:      "claude-haiku-4-5-20251001",
+      max_tokens: 4096,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdfBase64 } },
+          { type: "text",     text: prompt }
+        ]
+      }]
     }
   );
   if (result.status !== 200) {
-    const msg = result.body?.error?.message || result.body?.message || "PageGrid error";
-    if (result.status === 401) throw new Error("Invalid PageGrid API key.");
-    if (result.status === 429) throw new Error("PageGrid rate limit. Please wait.");
+    const msg = result.body?.error?.message || "Claude error";
+    if (result.status === 401) throw new Error("Invalid Claude API key.");
+    if (result.status === 429) throw new Error("Claude rate limit. Please wait.");
     throw new Error(msg);
   }
   return result.body?.content?.map(c => c.text || "").join("") || "";
 }
 
+// ── 3. OPENAI — PDF via Files API ──
 async function callOpenAI(apiKey, pdfBase64, prompt) {
+  // OpenAI accepts PDF as file_data in input_file content type
   const result = await httpsPost(
     "api.openai.com",
     "/v1/chat/completions",
     { "Authorization": `Bearer ${apiKey}` },
     {
       model: "gpt-4o",
-      max_tokens: 2048,
+      max_tokens: 4096,
       messages: [
-        { role: "system", content: "You are a GEM procurement expert. Return only valid JSON." },
-        { role: "user",   content: `PDF base64: data:application/pdf;base64,${pdfBase64}\n\n${prompt}` }
+        { role: "system", content: "You are a GEM (Government e-Marketplace) procurement expert. Return only valid JSON." },
+        {
+          role: "user",
+          content: [
+            {
+              type: "file",
+              file: {
+                filename:  "tender.pdf",
+                file_data: `data:application/pdf;base64,${pdfBase64}`
+              }
+            },
+            { type: "text", text: prompt }
+          ]
+        }
       ]
     }
   );
@@ -199,27 +219,40 @@ async function callOpenAI(apiKey, pdfBase64, prompt) {
   return result.body?.choices?.[0]?.message?.content || "";
 }
 
-async function callClaude(apiKey, pdfBase64, prompt) {
+// ── 4. PAGEGRID — text only (their API limit) ──
+async function callPageGrid(apiKey, pdfBase64, prompt) {
+  // PageGrid API doesn't accept PDF — extract text first
+  let pdfText = "";
+  try {
+    const pdfParse  = require("pdf-parse");
+    const pdfBuffer = Buffer.from(pdfBase64, "base64");
+    const data      = await pdfParse(pdfBuffer);
+    pdfText         = data.text || "";
+    if (!pdfText.trim()) throw new Error("PDF text extraction failed (scanned image?)");
+    console.log(`  PageGrid: extracted ${pdfText.length} chars from ${data.numpages} pages`);
+  } catch(e) {
+    throw new Error("PDF extraction failed for PageGrid: " + e.message);
+  }
+
+  if (pdfText.length > 80000) pdfText = pdfText.slice(0, 80000) + "\n[truncated]";
+
+  const fullPrompt = `${prompt}\n\n=== TENDER DOCUMENT TEXT ===\n${pdfText}\n=== END ===`;
+
   const result = await httpsPost(
-    "api.anthropic.com",
+    "api.pagegrid.in",
     "/v1/messages",
-    { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+    { "api-key": apiKey },
     {
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 2048,
-      messages: [{
-        role: "user",
-        content: [
-          { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdfBase64 } },
-          { type: "text", text: prompt }
-        ]
-      }]
+      model:      "claude-opus-4-6",
+      max_tokens: 4096,
+      messages: [{ role: "user", content: fullPrompt }]
     }
   );
   if (result.status !== 200) {
-    if (result.status === 401) throw new Error("Invalid Claude API key.");
-    if (result.status === 429) throw new Error("Claude rate limit. Please wait.");
-    throw new Error(result.body?.error?.message || "Claude error");
+    const msg = result.body?.error?.message || result.body?.message || "PageGrid error";
+    if (result.status === 401) throw new Error("Invalid PageGrid API key.");
+    if (result.status === 429) throw new Error("PageGrid rate limit. Please wait.");
+    throw new Error(msg);
   }
   return result.body?.content?.map(c => c.text || "").join("") || "";
 }
@@ -228,15 +261,14 @@ async function callClaude(apiKey, pdfBase64, prompt) {
 //  HTTP SERVER
 // ══════════════════════════════════════════════
 const server = http.createServer(async (req, res) => {
-
   res.setHeader("Access-Control-Allow-Origin",  "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
 
-  const parsedUrl  = new URL(req.url, `http://localhost:${PORT}`);
-  const pathname   = parsedUrl.pathname;
+  const parsedUrl = new URL(req.url, `http://localhost:${PORT}`);
+  const pathname  = parsedUrl.pathname;
 
   // ── GET /api/profile ────────────────────────
   if (pathname === "/api/profile" && req.method === "GET") {
@@ -285,22 +317,22 @@ const server = http.createServer(async (req, res) => {
         const provider = aiProvider || "gemini";
         const keyId    = apiKey.slice(-8);
 
-        console.log(`  [${provider}] Analyzing... (key: ...${keyId})`);
+        console.log(`\n  [${provider}] Analyzing... (key: ...${keyId})`);
         await rateLimit(provider + "_" + keyId);
 
         let text = "";
         if      (provider === "gemini")   text = await callGemini(apiKey, pdfBase64, prompt);
-        else if (provider === "pagegrid") text = await callPageGrid(apiKey, pdfBase64, prompt);
-        else if (provider === "openai")   text = await callOpenAI(apiKey, pdfBase64, prompt);
         else if (provider === "claude")   text = await callClaude(apiKey, pdfBase64, prompt);
+        else if (provider === "openai")   text = await callOpenAI(apiKey, pdfBase64, prompt);
+        else if (provider === "pagegrid") text = await callPageGrid(apiKey, pdfBase64, prompt);
         else throw new Error(`Unknown provider: ${provider}`);
 
-        console.log(`  ✓ Done. Response: ${text.length} chars`);
+        console.log(`  ✓ ${provider} response: ${text.length} chars\n`);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ text }));
 
       } catch(e) {
-        console.error("  Error:", e.message);
+        console.error("  ✗ Error:", e.message);
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: e.message }));
       }
@@ -321,8 +353,12 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log("\n─────────────────────────────────────────");
-  console.log(`  GEM Checker running at http://localhost:${PORT}`);
-  console.log(`  Storage: ${MONGO_URI ? "MongoDB Atlas ✓" : "Local file (profiles.json)"}`);
+  console.log(`  GEM Checker running on port ${PORT}`);
+  console.log(`  Storage: ${MONGO_URI ? "MongoDB Atlas ✓" : "Local file"}`);
   console.log("─────────────────────────────────────────");
-  console.log("  AI Providers: Gemini | PageGrid | OpenAI | Claude\n");
+  console.log("  AI Providers (PDF handling):");
+  console.log("    • Gemini   → native PDF support ✓");
+  console.log("    • Claude   → native PDF support ✓");
+  console.log("    • OpenAI   → native PDF support ✓");
+  console.log("    • PageGrid → text extraction (their limit)\n");
 });
