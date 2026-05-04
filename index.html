@@ -33,57 +33,63 @@
   window.__SERVER  = SERVER;
 
   onAuthStateChanged(auth, async (user) => {
-    if (!user) { window.location.href = "login.html"; return; }
+  window.__gem = true;
+  window.__authUser = user;
 
-    const key    = CACHE(user.uid);
-    const cached = localStorage.getItem(key);
-    
-    // ─── Has localStorage cache → GO TO DASHBOARD (no exceptions) ───
-    if (cached) {
-      try {
-        const profile = JSON.parse(cached);
-        if (profile && profile.companyName) {
-          // Tell React: go to dashboard
-          if (window.__setAppState) {
-            window.__setAppState({ screen: "dashboard", profile, user });
-          } else {
-            window.__pendingState = { screen: "dashboard", profile, user };
-          }
-          // Silent background sync (never changes screen)
-          fetch(`${SERVER}/api/profile?uid=${user.uid}`)
-            .then(r => r.ok ? r.json() : null)
-            .then(d => { if (d?.profile?.companyName) localStorage.setItem(key, JSON.stringify(d.profile)); })
-            .catch(() => {});
-          return;
-        }
-      } catch(e) { localStorage.removeItem(key); }
-    }
+  if (!user) {
+    window.location.href = "login.html";
+    return;
+  }
 
-    // ─── No cache → Try server ───
-    let profile = null;
-    for (let i = 1; i <= 5; i++) {
-      try {
-        const ctrl = new AbortController();
-        setTimeout(() => ctrl.abort(), 12000);
-        const res  = await fetch(`${SERVER}/api/profile?uid=${user.uid}`, { signal: ctrl.signal });
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const d = await res.json();
-        if (d?.profile?.companyName) { profile = d.profile; break; }
-        else { profile = null; break; } // confirmed new user
-      } catch(e) {
-        if (i < 5) await new Promise(r => setTimeout(r, 5000));
+  const key = CACHE(user.uid);
+  const cached = localStorage.getItem(key);
+
+  // 🔥 DEFAULT loading state
+  window.__appStatus = "loading";
+
+  // ✅ CACHE → direct dashboard
+  if (cached) {
+    try {
+      const profile = JSON.parse(cached);
+      if (profile && profile.companyName) {
+        window.__appStatus = "dashboard";
+        window.__currentProfile = profile;
+        return;
       }
+    } catch(e) {
+      localStorage.removeItem(key);
     }
+  }
 
-    if (profile) {
-      localStorage.setItem(key, JSON.stringify(profile));
-      if (window.__setAppState) window.__setAppState({ screen: "dashboard", profile, user });
-      else window.__pendingState = { screen: "dashboard", profile, user };
+  // 🔄 SERVER FETCH
+  try {
+    const res = await fetch(`${SERVER}/api/profile?uid=${user.uid}`);
+    if (res.ok) {
+      const d = await res.json();
+
+      if (d?.profile?.companyName) {
+        localStorage.setItem(key, JSON.stringify(d.profile));
+
+        window.__appStatus = "dashboard";
+        window.__currentProfile = d.profile;
+      } else {
+        window.__appStatus = "setup";
+      }
     } else {
-      if (window.__setAppState) window.__setAppState({ screen: "setup", profile: null, user });
-      else window.__pendingState = { screen: "setup", profile: null, user };
+      window.__appStatus = "setup";
     }
-  });
+  } catch (e) {
+    console.warn("Server sleep — fallback to cache/setup");
+
+    // 🔥 fallback
+    if (cached) {
+      window.__appStatus = "dashboard";
+      window.__currentProfile = JSON.parse(cached);
+    } else {
+      window.__appStatus = "setup";
+    }
+  }
+});
 </script>
 
 <script type="text/babel">
