@@ -44,13 +44,11 @@
     if (cached) {
       try {
         const profile = JSON.parse(cached);
-        if (profile && profile.companyName) {
+        if (profile && profile.companyName && profile.email) {
           // Tell React: go to dashboard
-          if (window.__setAppState) {
-            window.__setAppState({ screen: "dashboard", profile, user });
-          } else {
-            window.__pendingState = { screen: "dashboard", profile, user };
-          }
+          window.__appStatus = "dashboard";
+window.__currentProfile = profile;
+window.__authUser = user;
           // Silent background sync (never changes screen)
           fetch(`${SERVER}/api/profile?uid=${user.uid}`)
             .then(r => r.ok ? r.json() : null)
@@ -79,11 +77,12 @@
 
     if (profile) {
       localStorage.setItem(key, JSON.stringify(profile));
-      if (window.__setAppState) window.__setAppState({ screen: "dashboard", profile, user });
-      else window.__pendingState = { screen: "dashboard", profile, user };
+      window.__appStatus = "dashboard";
+window.__currentProfile = profile;
+window.__authUser = user;
     } else {
-      if (window.__setAppState) window.__setAppState({ screen: "setup", profile: null, user });
-      else window.__pendingState = { screen: "setup", profile: null, user };
+     window.__appStatus = "setup";
+window.__authUser = user;
     }
   });
 </script>
