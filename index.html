@@ -1161,7 +1161,7 @@ function App() {
   useEffect(() => {
     console.log("App mounted, polling for auth status...");
     const poll = setInterval(() => {
-      if (!window.__gem) return;
+      if (!window.__appStatus) return;
       const status = window.__appStatus;
       const profile = window.__currentProfile;
       console.log("Poll status:", status);
@@ -1185,7 +1185,7 @@ function App() {
         window.__appStatus = "setup";
       }
       setScreen("setup");
-    }, 25000);
+    }, 15000);
 
     return () => { clearInterval(poll); clearTimeout(timeout); };
   }, []);
