@@ -33,8 +33,6 @@
   window.__SERVER  = SERVER;
 
   onAuthStateChanged(auth, async (user) => {
-    window.__gem = true;
-     window.__authUser = user;
     if (!user) { window.location.href = "login.html"; return; }
 
     const key    = CACHE(user.uid);
@@ -44,11 +42,13 @@
     if (cached) {
       try {
         const profile = JSON.parse(cached);
-        if (profile && profile.companyName && profile.email) {
+        if (profile && profile.companyName) {
           // Tell React: go to dashboard
-          window.__appStatus = "dashboard";
-window.__currentProfile = profile;
-window.__authUser = user;
+          if (window.__setAppState) {
+            window.__setAppState({ screen: "dashboard", profile, user });
+          } else {
+            window.__pendingState = { screen: "dashboard", profile, user };
+          }
           // Silent background sync (never changes screen)
           fetch(`${SERVER}/api/profile?uid=${user.uid}`)
             .then(r => r.ok ? r.json() : null)
@@ -77,12 +77,11 @@ window.__authUser = user;
 
     if (profile) {
       localStorage.setItem(key, JSON.stringify(profile));
-      window.__appStatus = "dashboard";
-window.__currentProfile = profile;
-window.__authUser = user;
+      if (window.__setAppState) window.__setAppState({ screen: "dashboard", profile, user });
+      else window.__pendingState = { screen: "dashboard", profile, user };
     } else {
-     window.__appStatus = "setup";
-window.__authUser = user;
+      if (window.__setAppState) window.__setAppState({ screen: "setup", profile: null, user });
+      else window.__pendingState = { screen: "setup", profile: null, user };
     }
   });
 </script>
@@ -217,7 +216,7 @@ function SetupScreen({ onSaved, onCancel, initialData }) {
 
         <div style={{marginTop:"auto"}}>
           <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:"14px",fontSize:11,color:"#64748b",lineHeight:1.7}}>
-            Logged in as <strong style={{color:"#93c5fd"}}>{(window.__authUser && window.__authUser.email) || "Loading..."}</strong>
+            Logged in as <strong style={{color:"#93c5fd"}}>{window.__authUser?.email}</strong>
           </div>
         </div>
       </div>
@@ -663,8 +662,18 @@ Respond in clear English. Return ONLY valid JSON — no markdown, no extra text:
   // Handle profile update
   const handleProfileUpdate = async (updatedProfile) => {
     try {
-      const { user, saveProfile } = window.__gem;
-      await saveProfile(user.uid, updatedProfile);
+      const user = window.__authUser;
+      if (!user) throw new Error("Not logged in");
+      // Save to localStorage immediately
+      localStorage.setItem("gem_p_" + user.uid, JSON.stringify(updatedProfile));
+      // Save to server
+      try {
+        await fetch(`${window.__SERVER}/api/profile`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uid: user.uid, profile: updatedProfile })
+        });
+      } catch(e) { console.warn("Server sync skipped"); }
       window.__currentProfile = updatedProfile;
       setCurrentProfile(updatedProfile);
       setEditing(false);
@@ -1146,7 +1155,7 @@ function App() {
   useEffect(() => {
     console.log("App mounted, polling for auth status...");
     const poll = setInterval(() => {
-     if (typeof window.__appStatus === "undefined") return;
+      if (!window.__gem) return;
       const status = window.__appStatus;
       const profile = window.__currentProfile;
       console.log("Poll status:", status);
