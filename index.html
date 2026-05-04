@@ -34,6 +34,7 @@
 
   onAuthStateChanged(auth, async (user) => {
     window.__gem = true;
+     window.__authUser = user;
     if (!user) { window.location.href = "login.html"; return; }
 
     const key    = CACHE(user.uid);
