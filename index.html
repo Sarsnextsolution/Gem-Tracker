@@ -177,6 +177,8 @@ function SetupScreen({ onSaved, onCancel, initialData }) {
       const profile = { ...p, email: user.email, createdAt: new Date().toISOString() };
       // Save to localStorage immediately
       localStorage.setItem("gem_p_" + user.uid, JSON.stringify(profile));
+      window.__currentProfile = profile;
+window.__appStatus = "dashboard";
       // Save to server
       try {
         await fetch(`${window.__SERVER}/api/profile`, {
@@ -1179,13 +1181,37 @@ function App() {
 
     // Safety timeout — fall back to setup (NOT error)
     const timeout = setTimeout(() => {
-      clearInterval(poll);
-      console.warn("Auth timeout — falling back to setup");
-      if (window.__gem && window.__appStatus === "loading") {
-        window.__appStatus = "setup";
+  clearInterval(poll);
+  console.warn("Auth timeout — fallback safe mode");
+
+  // ✅ ONLY fallback if nothing available
+  if (!window.__appStatus || window.__appStatus === "loading") {
+
+    const user = window.__authUser;
+    if (user) {
+      const key = "gem_p_" + user.uid;
+      const cached = localStorage.getItem(key);
+
+      if (cached) {
+        try {
+          const profile = JSON.parse(cached);
+          if (profile?.companyName) {
+            window.__appStatus = "dashboard";
+            window.__currentProfile = profile;
+            setProfile(profile);
+            setScreen("dashboard");
+            return;
+          }
+        } catch(e) {}
       }
-      setScreen("setup");
-    }, 15000);
+    }
+
+    // 🔴 LAST fallback only
+    window.__appStatus = "setup";
+    setScreen("setup");
+  }
+
+}, 20000);
 
     return () => { clearInterval(poll); clearTimeout(timeout); };
   }, []);
