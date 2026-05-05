@@ -290,7 +290,6 @@ window.__appStatus = "dashboard";
                 {STATES.map(x=><option key={x}>{x}</option>)}
               </select>
             </div>
-            <div>
               <div style={{fontSize:10,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:"0.4px",marginBottom:4}}>Team Size</div>
               <select style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8,fontSize:13,fontFamily:"DM Sans,sans-serif",color:"#0f172a",background:"#f8fafc",outline:"none"}}
                 value={p.emp} onChange={e=>setP({...p,emp:e.target.value})}>
