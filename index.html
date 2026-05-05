@@ -148,7 +148,7 @@ function SetupScreen({ onSaved, onCancel, initialData }) {
     type:"Startup (DPIIT Registered)", turnover:"0",
     dpiit:false, msme:false, iso9001:false, iso27001:false, nasscom:false, 
     gem_seller:false, startupIndia:false, oem:false, pan:false, gst:false,
-    panNumber:"", gstin:"",
+    panNumber:"", gstin:"",vendorType: "Supply", // NEW FIELD
     doc_oem_cert:false, doc_oem_auth:false, doc_experience:false, doc_turnover:false,
     doc_balance_sheet:false, doc_past_orders:false, doc_delivery_cert:false, 
     doc_itr:false, doc_bank_stmt:false, doc_pq_docs:false, doc_mou:false, doc_workforce:false,
@@ -525,8 +525,10 @@ function Dashboard({ profile }) {
           profile.doc_workforce     && "Workforce/Staff Proof",
         ].filter(Boolean).join(", ") || "Basic documents only";
 
-        const ctx=`Company:${profile.companyName}|Type:${profile.type}|Started:${profile.incDate}|Turnover:₹${profile.turnover}L|Certifications:${certs}|Documents Available:${docsAvailable}|Categories:${profile.cats?.join(",")}|State:${profile.state}|Employees:${profile.emp}`;
-        const prompt=`You are a GEM (Government e-Marketplace) procurement expert. Analyze this tender document for the company below.
+        const ctx=`Company:${profile.companyName}|Type:${profile.type}|Started:${profile.incDate}|Turnover:₹${profile.turnover}L|Certifications:${certs}|Documents Available:${docsAvailable}|Categories:${profile.cats?.join(",")}
+VendorType:${profile.vendorType}
+BusinessNature:${profile.desc || "Not specified"}|State:${profile.state}|Employees:${profile.emp}`;
+        const prompt='IMPORTANT: The company can be ANY type — IT, grocery supplier, vegetable vendor, vehicle provider, manpower, construction, or services. Analyze strictly based on their category and business type. Do NOT assume IT company unless specified.You are a GEM (Government e-Marketplace) procurement expert. Analyze this tender document for the company below.
 
 Company Profile: ${ctx}
 
