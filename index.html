@@ -142,21 +142,56 @@ function LoadingScreen() {
     };
   }, []);
 
-  return (
-    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:14,background:"#f0f2f7",padding:20}}>
-      <div style={{width:48,height:48,border:"3px solid #e2e8f0",borderTopColor:"#2563eb",borderRadius:"50%",animation:"sp 0.8s linear infinite"}}></div>
-      <div style={{fontSize:14,color:"#0f172a",fontWeight:600,textAlign:"center",maxWidth:420}}>{msg}</div>
-      <div style={{fontSize:11,color:"#94a3b8"}}>{seconds}s elapsed</div>
+ return (
+  <>
+    <div style={{
+      minHeight:"100vh",
+      display:"flex",
+      alignItems:"center",
+      justifyContent:"center",
+      flexDirection:"column",
+      gap:14,
+      background:"#f0f2f7",
+      padding:20
+    }}>
+      <div style={{
+        width:48,
+        height:48,
+        border:"3px solid #e2e8f0",
+        borderTopColor:"#2563eb",
+        borderRadius:"50%",
+        animation:"sp 0.8s linear infinite"
+      }}></div>
+
+      <div style={{fontSize:14,color:"#0f172a",fontWeight:600,textAlign:"center",maxWidth:420}}>
+        {msg}
+      </div>
+
+      <div style={{fontSize:11,color:"#94a3b8"}}>
+        {seconds}s elapsed
+      </div>
+
       {seconds >= 5 && (
-        <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:10,padding:"12px 18px",fontSize:11,color:"#1e40af",maxWidth:420,textAlign:"center",lineHeight:1.7}}>
+        <div style={{
+          background:"#eff6ff",
+          border:"1px solid #bfdbfe",
+          borderRadius:10,
+          padding:"12px 18px",
+          fontSize:11,
+          color:"#1e40af",
+          maxWidth:420,
+          textAlign:"center",
+          lineHeight:1.7
+        }}>
           ☕ <strong>Free server is waking up</strong><br/>
-          The Render.com free tier sleeps when not in use. First request takes 30-60 seconds. Your data is safe and will load shortly.
+          First request takes 30–60 seconds.
         </div>
       )}
-      <style>{`@keyframes sp{to{transform:rotate(360deg)}}`}</style>
     </div>
-  );
-}
+
+    <style>{`@keyframes sp{to{transform:rotate(360deg)}}`}</style>
+  </>
+);
 
 /* ══════════════════════════════════════
    SCREEN 2 — COMPANY SETUP
