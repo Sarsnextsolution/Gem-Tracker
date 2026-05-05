@@ -275,7 +275,7 @@ window.__appStatus = "dashboard";
               </div>
             ))}
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(200px,1fr))",gap:12}}>
             <div>
               <div style={{fontSize:10,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:"0.4px",marginBottom:4}}>Company Type</div>
               <select style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8,fontSize:13,fontFamily:"DM Sans,sans-serif",color:"#0f172a",background:"#f8fafc",outline:"none"}}
@@ -297,8 +297,8 @@ window.__appStatus = "dashboard";
                 {["1-10","11-25","26-50","50+"].map(x=><option key={x}>{x}</option>)}
               </select>
             </div>
-            <div>
-  <div style={{fontSize:10,fontWeight:600,color:"#475569",textTransform:"uppercase",marginBottom:4}}>
+            <div style={{marginTop:12}}>
+  <div style={{fontSize:10,fontWeight:600,color:"#475569",marginBottom:4}}>
     Business Type
   </div>
   <select
@@ -311,6 +311,8 @@ window.__appStatus = "dashboard";
     <option>Both</option>
   </select>
 </div>
+            <div>
+  
             <div>
               <div style={{fontSize:10,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:"0.4px",marginBottom:4}}>Turnover (₹ Lakhs)</div>
               <input style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8,fontSize:13,fontFamily:"DM Sans,sans-serif",color:"#0f172a",background:"#f8fafc",outline:"none"}}
