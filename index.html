@@ -275,20 +275,59 @@ window.__appStatus = "dashboard";
               </div>
             ))}
           </div>
-         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(200px,1fr))",gap:12}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(200px,1fr))",gap:12}}>
 
+  {/* Company Type */}
   <div>
-    <div style={{fontSize:10,...}}>Company Type</div>
-    <select ...></select>
+    <div style={{
+      fontSize:10,
+      fontWeight:600,
+      color:"#475569",
+      marginBottom:4
+    }}>
+      Company Type
+    </div>
+    <select
+      value={p.type}
+      onChange={e=>setP({...p,type:e.target.value})}
+      style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8}}
+    >
+      <option>Startup (DPIIT Registered)</option>
+      <option>Private Limited</option>
+      <option>Partnership</option>
+      <option>Proprietorship</option>
+    </select>
   </div>
 
+  {/* State */}
   <div>
-    <div style={{fontSize:10,...}}>State</div>
-    <select ...></select>
+    <div style={{
+      fontSize:10,
+      fontWeight:600,
+      color:"#475569",
+      marginBottom:4
+    }}>
+      State
+    </div>
+    <select
+      value={p.state}
+      onChange={e=>setP({...p,state:e.target.value})}
+      style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8}}
+    >
+      {STATES.map(s=><option key={s}>{s}</option>)}
+    </select>
   </div>
 
+  {/* Team Size */}
   <div>
-    <div style={{fontSize:10,...}}>Team Size</div>
+    <div style={{
+      fontSize:10,
+      fontWeight:600,
+      color:"#475569",
+      marginBottom:4
+    }}>
+      Team Size
+    </div>
     <select
       value={p.emp}
       onChange={e=>setP({...p,emp:e.target.value})}
