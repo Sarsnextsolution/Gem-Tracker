@@ -275,28 +275,30 @@ window.__appStatus = "dashboard";
               </div>
             ))}
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(200px,1fr))",gap:12}}>
-            <div>
-              <div style={{fontSize:10,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:"0.4px",marginBottom:4}}>Company Type</div>
-              <select style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8,fontSize:13,fontFamily:"DM Sans,sans-serif",color:"#0f172a",background:"#f8fafc",outline:"none"}}
-                value={p.type} onChange={e=>setP({...p,type:e.target.value})}>
-                {["Startup (DPIIT Registered)","Pvt Ltd","OPC","Partnership","Proprietorship","LLP"].map(x=><option key={x}>{x}</option>)}
-              </select>
-            </div>
-            <div>
-              <div style={{fontSize:10,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:"0.4px",marginBottom:4}}>State</div>
-              <select style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8,fontSize:13,fontFamily:"DM Sans,sans-serif",color:"#0f172a",background:"#f8fafc",outline:"none"}}
-                value={p.state} onChange={e=>setP({...p,state:e.target.value})}>
-                {STATES.map(x=><option key={x}>{x}</option>)}
-              </select>
-            </div>
-              <div style={{fontSize:10,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:"0.4px",marginBottom:4}}>Team Size</div>
-              <select style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8,fontSize:13,fontFamily:"DM Sans,sans-serif",color:"#0f172a",background:"#f8fafc",outline:"none"}}
-                value={p.emp} onChange={e=>setP({...p,emp:e.target.value})}>
-                {["1-10","11-25","26-50","50+"].map(x=><option key={x}>{x}</option>)}
-              </select>
-            </div>
-          </div>
+         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(200px,1fr))",gap:12}}>
+
+  <div>
+    <div style={{fontSize:10,...}}>Company Type</div>
+    <select ...></select>
+  </div>
+
+  <div>
+    <div style={{fontSize:10,...}}>State</div>
+    <select ...></select>
+  </div>
+
+  <div>
+    <div style={{fontSize:10,...}}>Team Size</div>
+    <select
+      value={p.emp}
+      onChange={e=>setP({...p,emp:e.target.value})}
+      style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8}}
+    >
+      {["1-10","11-25","26-50","50+"].map(x=><option key={x}>{x}</option>)}
+    </select>
+  </div>
+
+</div>
             <div style={{marginTop:12}}>
   <div style={{fontSize:10,fontWeight:600,color:"#475569",marginBottom:4}}>
     Business Type
