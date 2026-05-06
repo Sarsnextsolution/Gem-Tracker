@@ -652,7 +652,42 @@ Respond in clear English. Return ONLY valid JSON — no markdown, no extra text:
         const data=await res.json(); setLStep(3);
         if(data.error) throw new Error(data.error);
         const clean=(data.text||"").replace(/```json|```/g,"").trim();
-        try{newR.push({file:file.name,...JSON.parse(clean),error:null});}
+        
+        try{
+          const parsed = JSON.parse(clean);
+
+// 🔥 CATEGORY MATCH FIX
+const companyCats = (profile.cats || []).map(c => c.toLowerCase());
+const tenderCat = (parsed?.eligibilityBreakdown?.category?.tenderCategory || "").toLowerCase();
+const desc = (parsed?.scopeOfWork?.summary || "").toLowerCase();
+
+// STEP 1: partial match
+const match = companyCats.some(cat =>
+  tenderCat.includes(cat) || cat.includes(tenderCat)
+);
+
+// STEP 2: keyword match
+const KEYWORDS = [
+  "cleaning","phenyl","detergent","broom","wiper","dustbin",
+  "vegetables","fruits","milk","grocery","transport","vehicle"
+];
+
+const keywordMatch = KEYWORDS.some(k =>
+  desc.includes(k)
+);
+
+// STEP 3: final decision
+if (match || keywordMatch) {
+  if (parsed.eligibilityBreakdown?.category) {
+    parsed.eligibilityBreakdown.category.status = "PASS";
+    parsed.eligibilityBreakdown.category.reason = "Matched via smart keyword/category logic";
+  }
+  if (parsed.eligibilityVerdict === "NOT_ELIGIBLE") {
+    parsed.eligibilityVerdict = "PARTIALLY_ELIGIBLE";
+  }
+}
+
+newR.push({ file: file.name, ...parsed, error: null });}
         catch{newR.push({file:file.name,error:"Could not parse AI response. Raw: "+clean.slice(0,300)});}
       }catch(e){newR.push({file:file.name,error:e.message});}
     }
