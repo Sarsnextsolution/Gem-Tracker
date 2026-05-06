@@ -224,6 +224,7 @@ if (!panRegex.test(p.panNumber)) {
   setErr("Invalid PAN format (Example: ABCDE1234F)");
   return;
 }
+    
 if (!p.gstin.trim()) {
   setErr("GSTIN is required");
   return;
@@ -233,6 +234,9 @@ if (!gstRegex.test(p.gstin)) {
   setErr("Invalid GSTIN format");
   return;
 }
+  const pan = p.panNumber.toUpperCase();
+const gst = p.gstin.toUpperCase();
+
 if (!p.cats || p.cats.length === 0) {
   setErr("Please select at least one work category");
   return;
@@ -246,7 +250,13 @@ if (!p.apiKey.trim()) {
     try {
       const user    = window.__authUser || window.__pendingState?.user;
       if (!user)    throw new Error("Not logged in. Please refresh and try again.");
-      const profile = { ...p, email: user.email, createdAt: new Date().toISOString() };
+const profile = { 
+  ...p,
+  panNumber: pan,   // uppercase PAN
+  gstin: gst,       // uppercase GST
+  email: user.email,
+  createdAt: new Date().toISOString()
+};
       // Save to localStorage immediately
       localStorage.setItem("gem_p_" + user.uid, JSON.stringify(profile));
       window.__currentProfile = profile;
@@ -322,7 +332,24 @@ window.__appStatus = "dashboard";
                   type={type} value={p[key]} placeholder={ph}
                   onChange={e=>setP({...p,[key]:e.target.value})}
                   onFocus={e=>{e.target.style.borderColor="#2563eb";e.target.style.background="#fff"}}
-                  onBlur={e=>{e.target.style.borderColor="#e2e8f0";e.target.style.background="#f8fafc"}}
+                onBlur={async () => {
+  if (p.gstin.length === 15) {
+    try {
+      const res = await fetch(`${window.__SERVER}/api/gst/${p.gstin}`);
+      const data = await res.json();
+
+      if (data?.companyName) {
+        setP(prev => ({
+          ...prev,
+          companyName: data.companyName,
+          state: data.state || prev.state
+        }));
+      }
+    } catch (e) {
+      console.log("GST fetch failed");
+    }
+  }
+}}
                 />
               </div>
             ))}
