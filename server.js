@@ -11,7 +11,6 @@ const http  = require("http");
 const https = require("https");
 const fs    = require("fs");
 const path  = require("path");
-const fetch = require("node-fetch");
 const PORT      = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI || "";
 
