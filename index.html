@@ -330,7 +330,7 @@ window.__appStatus = "dashboard";
                 <div style={{fontSize:10,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:"0.4px",marginBottom:4}}>{label}</div>
                 <input style={{width:"100%",padding:"9px 11px",border:"1px solid #e2e8f0",borderRadius:8,fontSize:13,fontFamily:"DM Sans,sans-serif",color:"#0f172a",background:"#f8fafc",outline:"none"}}
                   type={type} value={p[key]} placeholder={ph}
-                  onChange={e=>setP({...p,[key]:e.target.value})}
+                  onChange={e => {   const value =     key === "gstin" || key === "panNumber"       ? e.target.value.toUpperCase()       : e.target.value;    setP({...p, [key]: value}); }}  onBlur={key === "gstin" ? async () => {    if (p.gstin.length === 15) {      try {        const res = await fetch(         `${window.__SERVER}/api/gst/${p.gstin}`       );        const data = await res.json();        if (data?.companyName) {          setP(prev => ({           ...prev,           companyName: data.companyName,           state: data.state || prev.state         }));        }      } catch (e) {       console.log("GST fetch failed");     }    }  } : undefined}
                   onFocus={e=>{e.target.style.borderColor="#2563eb";e.target.style.background="#fff"}}
                 onBlur={async () => {
   if (p.gstin.length === 15) {
