@@ -11,7 +11,7 @@ const http  = require("http");
 const https = require("https");
 const fs    = require("fs");
 const path  = require("path");
-
+const fetch = require("node-fetch");
 const PORT      = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI || "";
 
@@ -486,7 +486,54 @@ const server = http.createServer(async (req, res) => {
     });
     return;
   }
+// ── GET /api/gst ───────────────────────────
+if (pathname.startsWith("/api/gst/") && req.method === "GET") {
 
+  const gstin = pathname.split("/").pop();
+
+  try {
+
+    const response = await fetch(
+      `https://gst-verification-api-get-profile-returns-data.p.rapidapi.com/v1/gstin/${gstin}`,
+      {
+        method: "GET",
+        headers: {
+         "x-rapidapi-key": process.env.RAPID_API_KEY,
+          "x-rapidapi-host":
+            "gst-verification-api-get-profile-returns-data.p.rapidapi.com"
+        }
+      }
+    );
+
+    const data = await response.json();
+
+    console.log("GST RESPONSE:", data);
+
+    res.writeHead(200, {
+      "Content-Type": "application/json"
+    });
+
+    res.end(JSON.stringify({
+      companyName: data?.data?.lgnm || "",
+      tradeName: data?.data?.tradeNam || "",
+      state: data?.data?.pradr?.addr?.stcd || ""
+    }));
+
+  } catch (e) {
+
+    console.error("GST ERROR:", e);
+
+    res.writeHead(500, {
+      "Content-Type": "application/json"
+    });
+
+    res.end(JSON.stringify({
+      error: "GST fetch failed"
+    }));
+  }
+
+  return;
+}
   // ── Static files ─────────────────────────────
   let filePath = pathname === "/" ? "/login.html" : pathname;
   filePath     = path.join(__dirname, filePath);
@@ -509,33 +556,4 @@ server.listen(PORT, () => {
   console.log("    • OpenAI   → native PDF support ✓");
   console.log("    • PageGrid → text extraction (their limit)\n");
 });
-app.get("/api/gst/:gstin", async (req, res) => {
-  const gstin = req.params.gstin;
 
-  try {
-    const response = await fetch(
-      `https://gst-verification-api-get-profile-returns-data.p.rapidapi.com/v1/gstin/${gstin}`,
-      {
-        method: "GET",
-        headers: {
-          "x-rapidapi-key": "a839f030d5msha9d8a1bf497fb2fp156ab6jsn9b535c31b7f1",
-          "x-rapidapi-host": "gst-verification-api-get-profile-returns-data.p.rapidapi.com"
-        }
-      }
-    );
-
-    const data = await response.json();
-
-    console.log("GST API response:", data); // debug
-
-    res.json({
-      companyName: data?.data?.lgnm || "",   // Legal Name
-      tradeName: data?.data?.tradeNam || "",
-      state: data?.data?.pradr?.addr?.stcd || ""
-    });
-
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "GST fetch failed" });
-  }
-});
