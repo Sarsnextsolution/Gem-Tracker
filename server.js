@@ -493,7 +493,7 @@ if (pathname.startsWith("/api/gst/") && req.method === "GET") {
   try {
 
     const response = await fetch(
-      `https://gst-verification-api-get-profile-returns-data.p.rapidapi.com/v1/gstin/${gstin}`,
+      `https://gst-verification-api-get-profile-returns-data.p.rapidapi.com/gstin/${gstin}`,
       {
         method: "GET",
         headers: {
