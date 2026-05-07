@@ -486,6 +486,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 // ── GET /api/gst ───────────────────────────
+// ── GET /api/gst ───────────────────────────
 if (pathname.startsWith("/api/gst/") && req.method === "GET") {
 
   const gstin = pathname.split("/").pop();
@@ -493,11 +494,11 @@ if (pathname.startsWith("/api/gst/") && req.method === "GET") {
   try {
 
     const response = await fetch(
-      `https://gst-verification-api-get-profile-returns-data.p.rapidapi.com/gstin/${gstin}`,
+      `https://gst-verification-api-get-profile-returns-data.p.rapidapi.com/v1/gstin/${gstin}/return/2024-25`,
       {
         method: "GET",
         headers: {
-         "x-rapidapi-key": process.env.RAPID_API_KEY,
+          "x-rapidapi-key": process.env.RAPIDAPI_KEY,
           "x-rapidapi-host":
             "gst-verification-api-get-profile-returns-data.p.rapidapi.com"
         }
@@ -513,9 +514,9 @@ if (pathname.startsWith("/api/gst/") && req.method === "GET") {
     });
 
     res.end(JSON.stringify({
-      companyName: data?.data?.lgnm || "",
-      tradeName: data?.data?.tradeNam || "",
-      state: data?.data?.pradr?.addr?.stcd || ""
+      success: true,
+      gstin,
+      data
     }));
 
   } catch (e) {
